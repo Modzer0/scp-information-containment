@@ -289,6 +289,17 @@ CREATE TABLE IF NOT EXISTS pumps (
 );
 CREATE INDEX IF NOT EXISTS idx_pumps_site ON pumps(site_id);
 
+CREATE TABLE IF NOT EXISTS cooling_units (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id         INTEGER NOT NULL,
+    sku             TEXT NOT NULL,
+    kw_rating       INTEGER NOT NULL,
+    cooling_type    TEXT NOT NULL,     -- crac | rdhx | chiller | dlc | immersion
+    status          TEXT NOT NULL,     -- online | offline | maintenance
+    installed_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cooling_site ON cooling_units(site_id);
+
 CREATE TABLE IF NOT EXISTS contracts (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
     contract_type          TEXT NOT NULL,
@@ -1756,9 +1767,54 @@ class Journal:
         ).fetchone()
         return int(row[0]) if row else 0
 
+    # --- cooling units (site-level cooling capacity additions) ---------
+
+    def create_cooling_unit(
+        self,
+        site_id: int,
+        sku: str,
+        kw_rating: int,
+        cooling_type: str,
+    ) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO cooling_units (site_id, sku, kw_rating, cooling_type, "
+            "status, installed_at) VALUES (?, ?, ?, ?, 'online', ?)",
+            (site_id, sku, kw_rating, cooling_type, iso(now_utc())),
+        )
+        return cur.lastrowid or 0
+
+    def list_cooling_units(self, site_id: int | None = None) -> list[dict]:
+        if site_id is not None:
+            rows = self._conn.execute(
+                "SELECT id, site_id, sku, kw_rating, cooling_type, status, "
+                "installed_at FROM cooling_units WHERE site_id = ? ORDER BY id",
+                (site_id,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT id, site_id, sku, kw_rating, cooling_type, status, "
+                "installed_at FROM cooling_units ORDER BY id"
+            ).fetchall()
+        return [
+            {
+                "id": r[0], "site_id": r[1], "sku": r[2],
+                "kw_rating": r[3], "cooling_type": r[4],
+                "status": r[5], "installed_at": r[6],
+            } for r in rows
+        ]
+
+    def sum_site_cooling_units_kw(self, site_id: int) -> int:
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(kw_rating), 0) FROM cooling_units "
+            "WHERE site_id = ? AND status = 'online'",
+            (site_id,),
+        ).fetchone()
+        return int(row[0]) if row else 0
+
     # --- reset (wipes all gameplay state; keeps schema) ---------------
 
     RESET_TABLES = (
+        "cooling_units",
         "pumps",
         "tape_libraries",
         "storage_arrays",

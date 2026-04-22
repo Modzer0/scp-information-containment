@@ -18,6 +18,7 @@ RESILIENCE_CATEGORIES = {"battery_bank", "fuel_storage"}
 STORAGE_CATEGORIES = {"storage_array", "tape_library"}
 HOST_MODULE_CATEGORIES = {"host_module"}
 PUMP_CATEGORIES = {"pump_system"}
+COOLING_CATEGORIES = {"cooling_unit"}
 AIRFIELD_RANK = ["none", "dirt_strip", "small_airport", "private_airfield"]
 PORT_RANK = ["none", "small_port", "deepwater_port"]
 
@@ -78,6 +79,7 @@ def buy(
     is_storage = sku.category in STORAGE_CATEGORIES
     is_host_module = sku.category in HOST_MODULE_CATEGORIES
     is_pump = sku.category in PUMP_CATEGORIES
+    is_cooling = sku.category in COOLING_CATEGORIES
     is_module = sku.category == "vm_module"
 
     if is_orbital:
@@ -116,7 +118,8 @@ def buy(
             )
         target_vm_id = None
     elif (is_host or is_site_module or is_aircraft or is_ship
-          or is_power_plant or is_resilience or is_storage or is_pump):
+          or is_power_plant or is_resilience or is_storage or is_pump
+          or is_cooling):
         if target_site_id is None:
             target_site_id = sites[0]["id"]
         if not any(s["id"] == target_site_id for s in sites):
@@ -487,6 +490,17 @@ def on_install_complete(journal: Journal, purchase_id: int) -> dict:
             {"pump_id": pump_id, "site_id": site_id,
              "capacity": cap, "redundant": redundant}
         )
+    elif sku.category == "cooling_unit":
+        site_id = p["target_site_id"]
+        kw = int(sku.capabilities.get("kw_rating", 0))
+        ctype = str(sku.capabilities.get("cooling_type", "crac"))
+        unit_id = journal.create_cooling_unit(
+            site_id=site_id, sku=sku.sku, kw_rating=kw, cooling_type=ctype,
+        )
+        result.update(
+            {"cooling_unit_id": unit_id, "site_id": site_id,
+             "kw_rating": kw, "cooling_type": ctype}
+        )
     elif sku.category == "host_module":
         # target_vm_id carries the host id for host_module purchases.
         host_id = int(p["target_vm_id"])
@@ -563,6 +577,9 @@ def site_utilization(journal: Journal, site_id: int) -> dict:
 
     power_kw_used = round(total_w / 1000, 2)
     cooling_kw_used = round(total_btu / 3412, 2)
+    # Installed cooling units stack onto the site-type base cooling budget.
+    cooling_units_kw = journal.sum_site_cooling_units_kw(site_id)
+    effective_cooling_cap = int(capacity["cooling_kw"]) + cooling_units_kw
     resilience = journal.get_site_resilience(site_id)
     ride_through_h = 0.0
     if power_kw_used > 0:
@@ -606,8 +623,10 @@ def site_utilization(journal: Journal, site_id: int) -> dict:
         "ride_through_hours": round(ride_through_h, 2),
         "heat_btu_hr": total_btu,
         "cooling_kw_used": cooling_kw_used,
-        "cooling_kw_capacity": capacity["cooling_kw"],
-        "cooling_over": cooling_kw_used > capacity["cooling_kw"],
+        "cooling_kw_capacity": effective_cooling_cap,
+        "cooling_kw_nominal": int(capacity["cooling_kw"]),
+        "cooling_kw_units": cooling_units_kw,
+        "cooling_over": cooling_kw_used > effective_cooling_cap,
         "ram_cap_gb": ram_cap_gb,
         "storage_cap_gb": round(storage_cap_gb, 1),
         "storage_used_gb": round(storage_used_gb, 1),

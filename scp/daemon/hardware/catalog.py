@@ -378,6 +378,62 @@ _add(Sku(
     description="Foundation-tier deep archive. Requires dedicated room.",
 ))
 
+# --- Cooling units (add kW of heat rejection to a site) --------------
+# Cooling equipment itself draws power (compressor/pump) — modeled via
+# the SKU's power_w field, which flows through to host specs at install.
+# Thermodynamics isn't precise here; kw_rating is the heat-rejection
+# capacity the site gains.
+
+_add(Sku(
+    "cooling-crac-20kw", "CRAC unit (20 kW air cooling)", "cooling_unit",
+    price_usd=15_000, power_w=6_000, form_factor="floor",
+    lead_time_s=_d(86_400 * 5),
+    capabilities={"kw_rating": 20, "cooling_type": "crac"},
+    description="Computer-room air conditioner. Cheap, low-density baseline.",
+))
+_add(Sku(
+    "cooling-rdhx-50kw", "Rear-door heat exchanger (50 kW per rack)", "cooling_unit",
+    price_usd=50_000, power_w=3_000, form_factor="rack_door",
+    lead_time_s=_d(86_400 * 14),
+    capabilities={"kw_rating": 50, "cooling_type": "rdhx"},
+    description="Passive-fan RDHX bolts to rack rear. Higher density than CRAC.",
+))
+_add(Sku(
+    "cooling-chiller-200kw", "Chiller plant (200 kW)", "cooling_unit",
+    price_usd=250_000, power_w=40_000, form_factor="facility",
+    lead_time_s=_d(86_400 * 30),
+    capabilities={"kw_rating": 200, "cooling_type": "chiller"},
+    description="Room-scale chilled-water plant. Standard DC cooling.",
+))
+_add(Sku(
+    "cooling-chiller-1mw", "Chiller plant (1 MW)", "cooling_unit",
+    price_usd=1_200_000, power_w=180_000, form_factor="facility",
+    lead_time_s=_d(86_400 * 90),
+    capabilities={"kw_rating": 1_000, "cooling_type": "chiller"},
+    description="Large DC plant chiller. Multi-row compute rooms.",
+))
+_add(Sku(
+    "cooling-dlc-100kw", "Direct-liquid cooling (100 kW, per rack)", "cooling_unit",
+    price_usd=180_000, power_w=12_000, form_factor="rack_u:full",
+    lead_time_s=_d(86_400 * 21),
+    capabilities={"kw_rating": 100, "cooling_type": "dlc"},
+    description="In-rack cold-plate liquid loop. Needed for DGZ pods at density.",
+))
+_add(Sku(
+    "cooling-immersion-50kw", "Immersion tank (50 kW, two-phase)", "cooling_unit",
+    price_usd=80_000, power_w=5_000, form_factor="tank",
+    lead_time_s=_d(86_400 * 30),
+    capabilities={"kw_rating": 50, "cooling_type": "immersion"},
+    description="Dielectric immersion. Extreme density; slow service access.",
+))
+_add(Sku(
+    "cooling-immersion-250kw", "Immersion cluster (250 kW)", "cooling_unit",
+    price_usd=380_000, power_w=22_000, form_factor="facility",
+    lead_time_s=_d(86_400 * 60),
+    capabilities={"kw_rating": 250, "cooling_type": "immersion"},
+    description="Multi-tank immersion array. AI-training scale.",
+))
+
 # --- Dewatering pump systems (mandatory for underground sites) -------
 
 _add(Sku(

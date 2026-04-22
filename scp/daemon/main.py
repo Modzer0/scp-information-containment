@@ -507,6 +507,12 @@ class Daemon:
                 "payload": {"pumps": self.journal.list_pumps()},
             }
 
+        if mtype == "list_cooling_units":
+            return {
+                "type": "list_cooling_units",
+                "payload": {"cooling_units": self.journal.list_cooling_units()},
+            }
+
         if mtype == "list_outages":
             return {
                 "type": "list_outages",

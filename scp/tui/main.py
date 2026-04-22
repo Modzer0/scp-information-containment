@@ -114,6 +114,7 @@ HELP_TOPICS = {
             ("recent", "Recent journal entries"),
             ("pending", "Scheduled events not yet fired"),
             ("power_plants", "Installed power plants (gensets, solar, reactors)"),
+            ("cooling", "Installed cooling units (CRAC / RDHX / chiller / DLC / immersion)"),
             ("pumps", "Installed dewatering pumps (required at underground sites)"),
             ("outages", "Active grid / ISP outages"),
             ("trigger_outage <site> [h]", "Force an outage for testing"),
@@ -852,6 +853,19 @@ class ScpTui(App):
                 }
             )
             self._log_reply("trigger_outage", reply)
+            return
+
+        if verb == "cooling":
+            reply = await self.client.send({"type": "list_cooling_units"})
+            units = reply.get("payload", {}).get("cooling_units", [])
+            if not units:
+                self._log("[dim]no cooling units installed[/]")
+            for u in units:
+                self._log(
+                    f"[cyan]#{u['id']:<3}[/] {u['cooling_type']:10s} "
+                    f"{u['kw_rating']:>5} kW  @site {u['site_id']}  "
+                    f"{u['sku']:30s} [{u['status']}]"
+                )
             return
 
         if verb == "pumps":
