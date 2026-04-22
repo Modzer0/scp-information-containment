@@ -533,10 +533,18 @@ class Journal:
         state: str = "candidate",
     ) -> int:
         ts = iso(now_utc())
+        # Pull size_gb from the profile at creation so items occupy real
+        # storage on-disk from the moment they exist. A bare-dict profile
+        # without a size field defaults to 0 (legacy safety).
+        size_gb = float(profile.get("size_gb", 0) or 0)
         cur = self._conn.execute(
             "INSERT INTO items (designation, item_class, hazard_strength, profile, "
-            "state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (designation, item_class, hazard_strength, json.dumps(profile), state, ts, ts),
+            "state, size_gb, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                designation, item_class, hazard_strength,
+                json.dumps(profile), state, size_gb, ts, ts,
+            ),
         )
         return cur.lastrowid or 0
 

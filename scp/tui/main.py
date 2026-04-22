@@ -26,9 +26,9 @@ HELP_TOPICS = {
             ("items [state]", "List ACTIVE items (archived ones live under `archived`)"),
             ("archived", "Browse archived items with size + site location"),
             ("item <id>", "Full detail for a single item"),
-            ("acquire <item>", "Move a candidate to quarantine"),
+            ("acquire <ids>", "Move candidate(s) to quarantine.  ids: 5 | 3-7 | 1,3,5"),
             ("analyze <item> <vm> [override]", "Analyze an item on a VM (override bypasses soft rail)"),
-            ("archive <item> [site]", "Archive analyzed item; optional target site = cross-site transmission"),
+            ("archive <ids> [site]", "Archive analyzed item(s); optional target site = cross-site transmission"),
             ("wipe <host>", "Forensic wipe + reprovision a compromised host"),
         ],
     },
@@ -39,7 +39,7 @@ HELP_TOPICS = {
             ("ships", "List owned surface ships"),
             ("submarines", "List owned submarines"),
             ("transport_methods", "Show truck / air / rail / sea methods"),
-            ("transfer_item <item> <site> [method]", "Ship an archived item between sites"),
+            ("transfer_item <ids> <site> [method]", "Ship archived items between sites.  ids: 5 | 3-7 | 1,3,9"),
             ("relocate_host <host> <site> [method]", "Move compute between sites"),
             ("reassign_staff <staff> <site>", "Send staff between sites"),
         ],
@@ -644,12 +644,36 @@ class ScpTui(App):
 
         if verb == "acquire":
             if len(parts) < 2:
-                self._log("[yellow]usage: acquire <item_id>[/]")
+                self._log("[yellow]usage: acquire <item_id|range|list>[/]")
                 return
-            reply = await self.client.send(
-                {"type": "acquire", "payload": {"item_id": int(parts[1])}}
-            )
-            self._log_reply("acquire", reply)
+            try:
+                item_ids = self._parse_id_range(parts[1])
+            except ValueError as exc:
+                self._log(f"[red]bad id range: {exc}[/]")
+                return
+            if len(item_ids) == 1:
+                reply = await self.client.send(
+                    {"type": "acquire", "payload": {"item_id": item_ids[0]}}
+                )
+                self._log_reply("acquire", reply)
+                return
+            ok = 0
+            failed: list[tuple[int, str]] = []
+            for iid in item_ids:
+                try:
+                    reply = await self.client.send(
+                        {"type": "acquire", "payload": {"item_id": iid}}
+                    )
+                except Exception as exc:
+                    failed.append((iid, str(exc)))
+                    continue
+                if reply.get("type") == "error":
+                    failed.append((iid, reply.get("payload", {}).get("error", "?")))
+                else:
+                    ok += 1
+            self._log(f"[green]batch acquire:[/] {ok} ok / {len(item_ids)}")
+            for iid, err in failed:
+                self._log(f"  [red]✗ item {iid}:[/] {err}")
             return
 
         if verb == "analyze":
@@ -672,13 +696,48 @@ class ScpTui(App):
 
         if verb == "archive":
             if len(parts) < 2:
-                self._log("[yellow]usage: archive <item_id> [target_site_id][/]")
+                self._log(
+                    "[yellow]usage: archive <item_id|range|list> [target_site_id][/]"
+                )
                 return
-            payload: dict = {"item_id": int(parts[1])}
-            if len(parts) > 2:
-                payload["target_site_id"] = int(parts[2])
-            reply = await self.client.send({"type": "archive", "payload": payload})
-            self._log_reply("archive", reply)
+            try:
+                item_ids = self._parse_id_range(parts[1])
+            except ValueError as exc:
+                self._log(f"[red]bad id range: {exc}[/]")
+                return
+            target_site = int(parts[2]) if len(parts) > 2 else None
+            if len(item_ids) == 1:
+                payload: dict = {"item_id": item_ids[0]}
+                if target_site is not None:
+                    payload["target_site_id"] = target_site
+                reply = await self.client.send(
+                    {"type": "archive", "payload": payload}
+                )
+                self._log_reply("archive", reply)
+                return
+            ok = 0
+            failed: list[tuple[int, str]] = []
+            for iid in item_ids:
+                sub_payload: dict = {"item_id": iid}
+                if target_site is not None:
+                    sub_payload["target_site_id"] = target_site
+                try:
+                    reply = await self.client.send(
+                        {"type": "archive", "payload": sub_payload}
+                    )
+                except Exception as exc:
+                    failed.append((iid, str(exc)))
+                    continue
+                if reply.get("type") == "error":
+                    failed.append((iid, reply.get("payload", {}).get("error", "?")))
+                else:
+                    ok += 1
+            target_tag = (
+                f" → site {target_site}" if target_site is not None else ""
+            )
+            self._log(f"[green]batch archive:[/] {ok} ok / {len(item_ids)}{target_tag}")
+            for iid, err in failed:
+                self._log(f"  [red]✗ item {iid}:[/] {err}")
             return
 
         if verb == "wipe":
@@ -930,21 +989,53 @@ class ScpTui(App):
         if verb == "transfer_item":
             if len(parts) < 3:
                 self._log(
-                    "[yellow]usage: transfer_item <item_id> <to_site_id> [method][/]"
+                    "[yellow]usage: transfer_item <item_id|range|list> "
+                    "<to_site_id> [method][/]\n"
+                    "[dim]  examples: transfer_item 5 2  |  transfer_item 3-7 2 sea  |  "
+                    "transfer_item 1,3,9 2[/]"
                 )
                 return
+            try:
+                item_ids = self._parse_id_range(parts[1])
+            except ValueError as exc:
+                self._log(f"[red]bad id range: {exc}[/]")
+                return
+            to_site = int(parts[2])
             method = parts[3] if len(parts) > 3 else "truck"
-            reply = await self.client.send(
-                {
-                    "type": "transfer_item",
-                    "payload": {
-                        "item_id": int(parts[1]),
-                        "to_site_id": int(parts[2]),
-                        "method_id": method,
-                    },
-                }
-            )
-            self._log_reply("transfer_item", reply)
+            ok = 0
+            failed: list[tuple[int, str]] = []
+            for iid in item_ids:
+                try:
+                    reply = await self.client.send(
+                        {
+                            "type": "transfer_item",
+                            "payload": {
+                                "item_id": iid,
+                                "to_site_id": to_site,
+                                "method_id": method,
+                            },
+                        }
+                    )
+                except Exception as exc:
+                    failed.append((iid, str(exc)))
+                    continue
+                if reply.get("type") == "error":
+                    failed.append((iid, reply.get("payload", {}).get("error", "?")))
+                else:
+                    ok += 1
+            if len(item_ids) == 1:
+                # Single-item: show the detailed reply like before
+                if ok:
+                    self._log(f"[green]✓ transfer_item ok[/] item {item_ids[0]} → site {to_site} via {method}")
+                for iid, err in failed:
+                    self._log(f"[red]✗ transfer_item item {iid}:[/] {err}")
+            else:
+                self._log(
+                    f"[green]batch transfer:[/] {ok} ok / {len(item_ids)} "
+                    f"→ site {to_site} via {method}"
+                )
+                for iid, err in failed:
+                    self._log(f"  [red]✗ item {iid}:[/] {err}")
             return
 
         if verb == "relocate_host":
@@ -1308,6 +1399,36 @@ class ScpTui(App):
         self._log(f"[bold cyan]-- {meta['title']} --[/]")
         for cmd, desc in meta["commands"]:
             self._log(f"  [cyan]{cmd:38s}[/] [dim]{desc}[/]")
+
+    @staticmethod
+    def _parse_id_range(arg: str) -> list[int]:
+        """Parse id arg: '5' / '3-7' / '1,3,5' / '1-3,7,10-12'. Returns a
+        de-duplicated list of ints preserving order. Raises ValueError on
+        malformed input."""
+        ids: list[int] = []
+        seen: set[int] = set()
+        arg = arg.strip()
+        if not arg:
+            raise ValueError("empty id range")
+        for chunk in arg.split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            if "-" in chunk and not chunk.startswith("-"):
+                lo_s, hi_s = chunk.split("-", 1)
+                lo, hi = int(lo_s), int(hi_s)
+                if lo > hi:
+                    lo, hi = hi, lo
+                for n in range(lo, hi + 1):
+                    if n not in seen:
+                        ids.append(n)
+                        seen.add(n)
+            else:
+                n = int(chunk)
+                if n not in seen:
+                    ids.append(n)
+                    seen.add(n)
+        return ids
 
     def _all_known_verbs(self) -> list[str]:
         if self._known_verbs:
