@@ -1555,6 +1555,50 @@ class Journal:
             (iso(next_billing_utc), iso(now_utc()), contract_id),
         )
 
+    # --- reset (wipes all gameplay state; keeps schema) ---------------
+
+    RESET_TABLES = (
+        "outages",
+        "site_resilience",
+        "power_plants",
+        "submarines",
+        "site_ground_station",
+        "satellites",
+        "ships",
+        "site_port",
+        "aircraft",
+        "site_airfield",
+        "playbooks",
+        "site_encryption",
+        "site_network",
+        "contracts",
+        "enrollments",
+        "purchases",
+        "incidents",
+        "mistakes",
+        "staff",
+        "funding",
+        "items",
+        "tape_drives",
+        "vms",
+        "hosts",
+        "site_capacity",
+        "sites",
+        "scheduled",
+        "events",
+    )
+
+    def reset_state(self) -> None:
+        """Truncate every gameplay table — campaign is gone. Schema stays."""
+        for table in self.RESET_TABLES:
+            self._conn.execute(f"DELETE FROM {table}")
+        # Reset AUTOINCREMENT so IDs start from 1 again in the new campaign.
+        self._conn.execute(
+            "DELETE FROM sqlite_sequence WHERE name IN ("
+            + ",".join(f"'{t}'" for t in self.RESET_TABLES)
+            + ")"
+        )
+
     # ------------------------------------------------------------------
 
     def close(self) -> None:

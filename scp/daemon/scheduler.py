@@ -40,6 +40,12 @@ class Scheduler:
         self._wake.set()
         return sid
 
+    def clear(self) -> None:
+        """Drop the in-memory heap. Caller is responsible for clearing the
+        persisted scheduled table if desired (e.g., during a state reset)."""
+        self._heap.clear()
+        self._wake.set()
+
     async def run(self) -> None:
         while True:
             if not self._heap:

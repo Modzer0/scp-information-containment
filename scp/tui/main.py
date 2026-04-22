@@ -112,6 +112,7 @@ HELP_TOPICS = {
             ("ping", "Daemon round-trip"),
             ("quit", "Exit TUI (daemon keeps running)"),
             ("shutdown --confirm", "Stop the daemon gracefully (ALL activity halts)"),
+            ("reset", "Wipe all state and start a fresh simulation (interactive YES prompt)"),
         ],
     },
 }
@@ -140,6 +141,8 @@ class ScpTui(App):
         self.log_widget: RichLog | None = None
         self.status_widget: Static | None = None
         self._known_verbs: list[str] = []
+        # Pending verification prompt (set when an action requires YES to proceed)
+        self._pending_confirm: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -285,6 +288,25 @@ class ScpTui(App):
         except Exception as exc:
             self._log(f"[red]err: {exc}[/]")
 
+    async def _do_reset(self) -> None:
+        try:
+            reply = await self.client.send(
+                {"type": "reset", "payload": {"reason": "tui reset --confirm"}}
+            )
+        except Exception as exc:
+            self._log(f"[red]reset request failed: {exc}[/]")
+            return
+        if reply.get("type") == "error":
+            self._log(f"[red]reset failed:[/] {reply.get('payload', {}).get('error')}")
+            return
+        self._log("[bold green]state reset — fresh simulation bootstrapped[/]")
+        try:
+            await self.refresh_recent()
+            await self._show_sitrep()
+            await self._refresh_statusbar()
+        except Exception:
+            pass
+
     async def _reconnect(self) -> None:
         try:
             await self.client.close()
@@ -311,11 +333,35 @@ class ScpTui(App):
             self._log(f"[red]reconnect failed: {e}[/]  (retry a command to try again)")
 
     async def execute(self, cmd: str) -> None:
+        # If an action is awaiting verification, treat this input as the
+        # response. Only "YES" (case-insensitive) proceeds; anything else
+        # cancels, and the typed text is NOT run as a command.
+        if self._pending_confirm is not None:
+            pending = self._pending_confirm
+            self._pending_confirm = None
+            if cmd.strip().upper() == "YES":
+                if pending == "reset":
+                    await self._do_reset()
+                return
+            self._log(f"[dim]{pending} cancelled[/]")
+            return
+
         parts = cmd.split()
         verb = parts[0].lower()
 
         if verb in ("quit", "exit"):
             self.exit()
+            return
+
+        if verb == "reset":
+            self._pending_confirm = "reset"
+            self._log(
+                "[bold red]CAUTION:[/] this deletes ALL state — sites, fleets, "
+                "staff, incidents, journal, funding balance, scheduled jobs."
+            )
+            self._log(
+                "[yellow]type [bold]YES[/] (anything else cancels):[/]"
+            )
             return
 
         if verb == "shutdown":

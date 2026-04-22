@@ -221,10 +221,30 @@ temporary SQLite database.
 
 ## Resetting state
 
-State lives at `~/.scp/scp.db`. Stop the daemon (`shutdown --confirm`),
-delete the file, and relaunch for a fresh campaign. Schema additions
-between runs are applied via `ALTER TABLE ADD COLUMN` where possible, so
-existing DBs usually keep working.
+Two ways to start a fresh campaign:
+
+**From the TUI (preferred)** — daemon keeps running:
+```text
+> reset
+CAUTION: this deletes ALL state — sites, fleets, staff, incidents, journal, funding balance, scheduled jobs.
+type YES (anything else cancels):
+> YES
+state reset — fresh simulation bootstrapped
+```
+The `reset` verb clears every gameplay table, drops the in-memory
+scheduler heap, re-bootstraps the default site + staff + $1M funding,
+and re-queues the outage roll — atomically, without restarting the daemon.
+
+**Manual nuke** — stop the daemon first, then delete the DB file:
+```bash
+# inside TUI:  shutdown --confirm
+rm ~/.scp/scp.db
+# relaunch:    ./scripts/run-daemon.sh
+```
+Equivalent to `reset` but also drops the schema; the daemon will recreate
+it on next start. Schema additions between versions are applied via
+`ALTER TABLE ADD COLUMN` where possible, so existing DBs usually keep
+working across upgrades.
 
 ## Status
 

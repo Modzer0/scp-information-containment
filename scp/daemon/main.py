@@ -240,6 +240,23 @@ class Daemon:
                 "payload": {"shutting_down": True, "time": iso(now_utc())},
             }
 
+        if mtype == "reset":
+            # Wipe every gameplay table, clear the in-memory scheduler heap,
+            # re-bootstrap default site/staff/funding, re-queue the outage roll.
+            self.scheduler.clear()
+            self.journal.reset_state()
+            gameplay.bootstrap_if_empty(self.journal)
+            outages.schedule_next_roll(self.scheduler.add)
+            self.journal.append(
+                "state_reset",
+                "ALERT",
+                {"time": iso(now_utc()), "reason": payload.get("reason", "client request")},
+            )
+            return {
+                "type": "ack",
+                "payload": {"reset": True, "time": iso(now_utc())},
+            }
+
         if mtype == "schedule_event":
             eta = from_iso(payload["eta"])
             kind = payload.get("kind", "test")
