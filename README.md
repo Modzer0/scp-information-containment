@@ -13,28 +13,47 @@ hardware, logistics, staff, orbit, subs, facilities, research, risk).
 
 ## Quick start
 
-Requires **Python 3.11+** (tested on 3.14 Windows). Clone and install:
+Requires **Python 3.11+** (tested on 3.14 Windows, 3.12 Linux/macOS).
 
 ```bash
-git clone <this-repo-url>
-cd SCP
-
-python -m venv .venv
-. .venv/Scripts/activate          # Windows (bash)
-# or: . .venv/bin/activate        # macOS/Linux
-# or: .venv\Scripts\Activate.ps1  # Windows PowerShell
-
-pip install -e .
+git clone https://github.com/Modzer0/scp-information-containment.git
+cd scp-information-containment
 ```
 
-Run in two terminals:
+### Install + run (platform scripts)
+
+**Linux / macOS:**
+```bash
+./scripts/install.sh                    # creates .venv, pip install, verifies
+./scripts/run-daemon.sh                 # terminal 1 — starts daemon
+./scripts/run-tui.sh                    # terminal 2 — attaches TUI
+```
+
+**Windows (PowerShell):**
+```powershell
+.\scripts\install.ps1                   # creates .venv, pip install, verifies
+.\scripts\run-daemon.ps1                # terminal 1
+.\scripts\run-tui.ps1                   # terminal 2
+```
+
+**Windows (cmd.exe):**
+```cmd
+scripts\install.bat
+scripts\run-daemon.bat
+scripts\run-tui.bat
+```
+
+### Install + run (manual)
 
 ```bash
-# Terminal 1 — start the daemon (long-running background service)
-python -m scp daemon
+python -m venv .venv
+. .venv/bin/activate                    # macOS/Linux
+# or: . .venv/Scripts/activate          # Windows (Git Bash)
+# or: .venv\Scripts\Activate.ps1        # Windows PowerShell
 
-# Terminal 2 — attach the TUI
-python -m scp tui
+pip install -e .
+python -m scp daemon                    # terminal 1
+python -m scp tui                       # terminal 2
 ```
 
 All state persists at `~/.scp/scp.db`. Stopping the TUI does not stop the
