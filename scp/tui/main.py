@@ -28,7 +28,7 @@ HELP_TOPICS = {
             ("item <id>", "Full detail for a single item"),
             ("acquire <ids>", "Move candidate(s) to quarantine.  ids: 5 | 3-7 | 1,3,5"),
             ("analyze <item> <vm> [override]", "Analyze an item on a VM (override bypasses soft rail)"),
-            ("archive <ids> [site]", "Archive analyzed item(s); optional target site = cross-site transmission"),
+            ("archive <ids|all> [site]", "Archive analyzed item(s); optional target site = cross-site transmission"),
             ("wipe <host>", "Forensic wipe + reprovision a compromised host"),
         ],
     },
@@ -48,6 +48,7 @@ HELP_TOPICS = {
         "title": "Sites + infrastructure",
         "commands": [
             ("site_types", "List buildable site types"),
+            ("site <id>", "Full dashboard for one site (staff, hosts, VMs, power, cooling, storage, fleet)"),
             ("establish_site <type> <name>", "Order a new site"),
             ("vms", "List VMs + containment + host status"),
             ("vm <id>", "Full VM containment breakdown with component bars"),
@@ -758,14 +759,26 @@ class ScpTui(App):
         if verb == "archive":
             if len(parts) < 2:
                 self._log(
-                    "[yellow]usage: archive <item_id|range|list> [target_site_id][/]"
+                    "[yellow]usage: archive <item_id|range|list|all> [target_site_id][/]"
                 )
                 return
-            try:
-                item_ids = self._parse_id_range(parts[1])
-            except ValueError as exc:
-                self._log(f"[red]bad id range: {exc}[/]")
-                return
+            if parts[1].lower() == "all":
+                reply_all = await self.client.send(
+                    {"type": "list_items", "payload": {"state": "analyzed"}}
+                )
+                item_ids = [
+                    i["id"]
+                    for i in reply_all.get("payload", {}).get("items", [])
+                ]
+                if not item_ids:
+                    self._log("[dim]no analyzed items to archive[/]")
+                    return
+            else:
+                try:
+                    item_ids = self._parse_id_range(parts[1])
+                except ValueError as exc:
+                    self._log(f"[red]bad id range: {exc}[/]")
+                    return
             target_site = int(parts[2]) if len(parts) > 2 else None
             if len(item_ids) == 1:
                 payload: dict = {"item_id": item_ids[0]}
@@ -1126,18 +1139,35 @@ class ScpTui(App):
         if verb == "transfer_item":
             if len(parts) < 3:
                 self._log(
-                    "[yellow]usage: transfer_item <item_id|range|list> "
+                    "[yellow]usage: transfer_item <item_id|range|list|all> "
                     "<to_site_id> [method][/]\n"
                     "[dim]  examples: transfer_item 5 2  |  transfer_item 3-7 2 sea  |  "
-                    "transfer_item 1,3,9 2[/]"
+                    "transfer_item 1,3,9 2  |  transfer_item all 2[/]"
                 )
                 return
-            try:
-                item_ids = self._parse_id_range(parts[1])
-            except ValueError as exc:
-                self._log(f"[red]bad id range: {exc}[/]")
-                return
             to_site = int(parts[2])
+            if parts[1].lower() == "all":
+                # 'all' = every archived item not already at the destination site
+                reply_all = await self.client.send(
+                    {"type": "list_items", "payload": {"state": "archived"}}
+                )
+                all_items = reply_all.get("payload", {}).get("items", [])
+                item_ids = [
+                    i["id"] for i in all_items
+                    if i.get("current_site_id") != to_site
+                ]
+                if not item_ids:
+                    self._log(
+                        f"[dim]no archived items to transfer "
+                        f"(all already at site {to_site})[/]"
+                    )
+                    return
+            else:
+                try:
+                    item_ids = self._parse_id_range(parts[1])
+                except ValueError as exc:
+                    self._log(f"[red]bad id range: {exc}[/]")
+                    return
             method = parts[3] if len(parts) > 3 else "truck"
             ok = 0
             failed: list[tuple[int, str]] = []
@@ -1557,6 +1587,24 @@ class ScpTui(App):
             self._show_vm_detail(target)
             return
 
+        if verb == "site":
+            if len(parts) < 2:
+                self._log("[yellow]usage: site <site_id>[/]")
+                return
+            try:
+                site_id = int(parts[1])
+            except ValueError:
+                self._log("[red]site id must be an integer[/]")
+                return
+            reply = await self.client.send(
+                {"type": "site_detail", "payload": {"site_id": site_id}}
+            )
+            if reply.get("type") == "error":
+                self._log(f"[red]{reply['payload'].get('error')}[/]")
+                return
+            self._render_site_detail(reply.get("payload", {}))
+            return
+
         if verb == "host":
             if len(parts) < 2:
                 self._log("[yellow]usage: host <id>[/]")
@@ -1737,6 +1785,157 @@ class ScpTui(App):
             bar = "█" * val + "·" * max(0, 10 - val)
             self._log(f"    {k:22s} {val:>2}  [dim]{bar}[/]")
         self._log(f"[bold]{'-' * 60}[/]")
+
+    def _render_site_detail(self, d: dict) -> None:
+        """Full dashboard for one site — everything in one place."""
+        site = d.get("site") or {}
+        u = d.get("utilization") or {}
+        self._log(f"[bold]{'=' * 62}[/]")
+        self._log(
+            f"[bold cyan]SITE {site.get('id')}[/]  {site.get('name')}  "
+            f"[dim]type={site.get('type')} created={site.get('created_at', '')[:10]}[/]"
+        )
+        # Connectivity + encryption
+        net = d.get("network_tier") or "?"
+        enc = d.get("encryption_level") or "none"
+        enc_color = {"none": "red", "software": "yellow",
+                     "hardware": "green", "type1": "bold green"}.get(enc, "white")
+        self._log(
+            f"  network=[cyan]{net}[/]  encryption=[{enc_color}]{enc}[/]  "
+            f"airfield={d.get('airfield_tier')}  port={d.get('port_tier')}  "
+            f"ground_station={d.get('ground_station_tier')}"
+        )
+        # Power + cooling + resilience
+        pw_col = "red" if u.get("power_over") else "green"
+        cl_col = "red" if u.get("cooling_over") else "green"
+        res = d.get("resilience", {})
+        tags = []
+        if u.get("fuel_starved"):
+            tags.append("[bold red]FUEL-STARVED[/]")
+        if u.get("flooded"):
+            tags.append("[bold red]FLOODED[/]")
+        if u.get("outaged"):
+            tags.append("[bold red]GRID-DARK[/]")
+        tag_str = "  " + " ".join(tags) if tags else ""
+        self._log(
+            f"  power=[{pw_col}]{u.get('power_kw_used', 0):.2f}/"
+            f"{u.get('power_kw_capacity', 0)}kW[/] "
+            f"(nominal {u.get('power_kw_nominal', 0)}, plants {u.get('power_kw_plants', 0)})  "
+            f"cooling=[{cl_col}]{u.get('cooling_kw_used', 0):.2f}/"
+            f"{u.get('cooling_kw_capacity', 0)}kW[/]{tag_str}"
+        )
+        self._log(
+            f"  resilience: battery={res.get('battery_kwh', 0):.0f} kWh  "
+            f"fuel={res.get('fuel_hours', 0):.0f} h  "
+            f"→ ride≈{u.get('ride_through_hours', 0):.1f} h"
+        )
+        # Storage / tape / ram
+        stor_col = "red" if u.get("storage_over") else "green"
+        tape_col = "red" if u.get("tape_over") else "green"
+        self._log(
+            f"  storage=[{stor_col}]{u.get('storage_used_gb', 0):.0f}/"
+            f"{u.get('storage_cap_gb', 0):.0f} GB[/]  "
+            f"tape=[{tape_col}]{u.get('tape_used_gb', 0):.0f}/"
+            f"{u.get('tape_cap_gb', 0):.0f} GB[/]  "
+            f"RAM={u.get('ram_cap_gb', 0)} GB"
+        )
+
+        # Active outages
+        outs = d.get("active_outages", [])
+        if outs:
+            self._log(f"  [bold red]ACTIVE OUTAGES:[/] {len(outs)}")
+            for o in outs:
+                ride = "ride-through" if o["ride_through"] else "[red]DARK[/]"
+                self._log(
+                    f"    #{o['id']} {o['kind']} {o['duration_h']:.1f}h {ride}"
+                )
+
+        # Staff
+        staff = d.get("staff", [])
+        if staff:
+            self._log(f"[bold]-- staff ({len(staff)}) --[/]")
+            for s in staff:
+                auto = "[bold magenta]AUTO[/]" if s.get("autonomy") == "on" else "manual"
+                you = "[bold green](you)[/]" if s.get("is_player") else ""
+                sk = " ".join(f"{k}={v}" for k, v in s.get("skills", {}).items())
+                self._log(
+                    f"  {s['id']:>3}  {s['name']:24s} {s['role']:18s} "
+                    f"L{s['clearance']}  [{s['status']}]  {auto}  {you}  [dim]{sk}[/]"
+                )
+
+        # Hosts + VMs
+        hosts = d.get("hosts", [])
+        vms = d.get("vms", [])
+        if hosts:
+            self._log(f"[bold]-- compute ({len(hosts)} hosts, {len(vms)} VMs) --[/]")
+            for h in hosts:
+                specs = h.get("specs", {})
+                self._log(
+                    f"  host {h['id']:>3}  {h['name']:26s} {h['class']:10s} "
+                    f"[{h['status']}]  "
+                    f"ram={specs.get('ram_gb', 0)}GB storage={specs.get('storage_gb', 0)}GB "
+                    f"power={specs.get('power_w', 0)}W"
+                )
+                for v in vms:
+                    if v["host_id"] == h["id"]:
+                        cont = sum(int(x) for x in v.get("spec", {}).values())
+                        self._log(
+                            f"    vm {v['id']:>3}  {v['name']:20s} containment={cont}  "
+                            f"[{v['status']}]"
+                        )
+
+        # Items on this site
+        ibs = d.get("items_by_state", {})
+        active = sum(len(ibs.get(s, [])) for s in
+                     ("candidate", "quarantined", "analyzing", "analyzed",
+                      "archiving", "in_transit"))
+        archived = len(ibs.get("archived", []))
+        if active or archived:
+            self._log(f"[bold]-- items --[/]")
+            for state in ("candidate", "quarantined", "analyzing", "analyzed",
+                          "archiving", "in_transit"):
+                xs = ibs.get(state, [])
+                if xs:
+                    self._log(f"  {state:12s}: {len(xs)}  " +
+                              ", ".join(f"{i['designation']}({i['class'][0]})"
+                                        for i in xs[:8]) +
+                              ("..." if len(xs) > 8 else ""))
+            if archived:
+                self._log(f"  archived    : {archived}  [dim](type 'archived' for detail)[/]")
+
+        # Infrastructure additions
+        def _section(title, rows, render):
+            if rows:
+                self._log(f"[bold]-- {title} ({len(rows)}) --[/]")
+                for r in rows:
+                    self._log(f"  {render(r)}")
+        _section("power plants", d.get("power_plants", []),
+                 lambda p: f"{p['plant_type']:12s} {p['kw_rating']:>5} kW  {p['sku']:30s} [{p['status']}]")
+        _section("cooling units", d.get("cooling_units", []),
+                 lambda c: f"{c['cooling_type']:10s} {c['kw_rating']:>5} kW  {c['sku']:30s} [{c['status']}]")
+        _section("pumps", d.get("pumps", []),
+                 lambda p: f"{p['capacity']:6s} {p['sku']:30s} [{p['status']}]")
+        _section("storage arrays", d.get("storage_arrays", []),
+                 lambda a: f"{a['array_type']:6s} {a['capacity_gb']:>10,.0f} GB  {a['sku']:25s} [{a['status']}]")
+        _section("tape drives", d.get("tape_drives", []),
+                 lambda t: f"{t.get('name', '')}")
+        _section("tape libraries", d.get("tape_libraries", []),
+                 lambda t: f"{t['capacity_gb']:>12,.0f} GB  {t['sku']:25s} [{t['status']}]")
+
+        # Fleet based here
+        fleet = d.get("aircraft", []) + d.get("ships", []) + d.get("submarines", [])
+        if fleet:
+            if d.get("aircraft"):
+                _section("aircraft", d["aircraft"],
+                         lambda a: f"{a['tail_number']:8s} {a['sku']:22s} class={a['class']:18s} [{a['status']}]")
+            if d.get("ships"):
+                _section("ships", d["ships"],
+                         lambda s: f"{s['hull_number']:8s} {s['sku']:22s} class={s['class']:10s} [{s['status']}]")
+            if d.get("submarines"):
+                _section("submarines", d["submarines"],
+                         lambda s: f"{s['hull_number']:8s} {s['sku']:22s} class={s['class']:10s} [{s['status']}]")
+
+        self._log(f"[bold]{'=' * 62}[/]")
 
     def _show_host_detail(self, h: dict, vms: list[dict]) -> None:
         specs = h.get("specs", {})

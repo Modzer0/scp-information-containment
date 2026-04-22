@@ -118,6 +118,16 @@ _add(SiteType(
     default_network="geo_sat", requires_diesel=True,
     description="Polar ice station. Free passive cooling; brutal logistics.",
 ))
+_add(SiteType(
+    "oil_platform", "Offshore oil-platform conversion",
+    capex_usd=45_000_000, lead_time_s=_d(86_400 * 180),
+    power_kw=80, cooling_kw=400,      # seawater cooling
+    default_network="starstream", requires_diesel=True,
+    description=(
+        "Repurposed decommissioned oil rig. Helipad + vessel moorage; "
+        "international-waters-ish. Seawater cooling; helicopter logistics."
+    ),
+))
 
 
 def list_types() -> list[SiteType]:

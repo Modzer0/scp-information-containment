@@ -507,6 +507,72 @@ class Daemon:
                 "payload": {"pumps": self.journal.list_pumps()},
             }
 
+        if mtype == "site_detail":
+            site_id = int(payload["site_id"])
+            sites_ = [s for s in self.journal.list_sites() if s["id"] == site_id]
+            if not sites_:
+                return {
+                    "type": "error",
+                    "payload": {"error": f"no site with id {site_id}"},
+                }
+            site = sites_[0]
+            util = procurement.site_utilization(self.journal, site_id)
+            hosts_here = [h for h in self.journal.list_hosts() if h["site_id"] == site_id]
+            host_ids = {h["id"] for h in hosts_here}
+            vms_here = [
+                v for v in self.journal.list_vms() if v["host_id"] in host_ids
+            ]
+            items_here = [
+                i for i in self.journal.list_items()
+                if i.get("current_site_id") == site_id
+            ]
+            detail = {
+                "site": site,
+                "utilization": util,
+                "network_tier": self.journal.get_site_network(site_id),
+                "encryption_level": self.journal.get_site_encryption(site_id),
+                "airfield_tier": self.journal.get_site_airfield(site_id),
+                "port_tier": self.journal.get_site_port(site_id),
+                "ground_station_tier": self.journal.get_site_ground_station(site_id),
+                "resilience": self.journal.get_site_resilience(site_id),
+                "hosts": hosts_here,
+                "vms": vms_here,
+                "staff": [
+                    s for s in self.journal.list_staff()
+                    if s.get("assigned_site_id") == site_id
+                ],
+                "aircraft": [
+                    a for a in self.journal.list_aircraft()
+                    if a.get("site_id") == site_id
+                ],
+                "ships": [
+                    s for s in self.journal.list_ships()
+                    if s.get("site_id") == site_id
+                ],
+                "submarines": [
+                    s for s in self.journal.list_submarines()
+                    if s.get("site_id") == site_id
+                ],
+                "power_plants": self.journal.list_power_plants(site_id),
+                "cooling_units": self.journal.list_cooling_units(site_id),
+                "pumps": self.journal.list_pumps(site_id),
+                "tape_drives": [
+                    d for d in self.journal.list_tape_drives()
+                    if d.get("site_id") == site_id
+                ],
+                "tape_libraries": self.journal.list_tape_libraries(site_id),
+                "storage_arrays": self.journal.list_storage_arrays(site_id),
+                "active_outages": self.journal.active_outages(site_id),
+                "items_by_state": {
+                    state: [i for i in items_here if i["state"] == state]
+                    for state in (
+                        "candidate", "quarantined", "analyzing", "analyzed",
+                        "archiving", "in_transit", "archived",
+                    )
+                },
+            }
+            return {"type": "site_detail", "payload": detail}
+
         if mtype == "list_cooling_units":
             return {
                 "type": "list_cooling_units",

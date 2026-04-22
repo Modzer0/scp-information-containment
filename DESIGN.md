@@ -1370,6 +1370,85 @@ Non-exponential. Force trade-offs: I300 pod vs. subsea pod vs. mainframe refit. 
 
 Open decision (§27) — do GOIs track your assets with imperfect intel, mirroring your fog over them?
 
+### 24.5 Combat & field-ops mechanics (deferred — planned Phase 12+)
+
+Aircraft, ships, and submarines currently exist as cargo-transport and basing
+assets. The design intent is to give each a distinct operational role beyond
+hauling containers, all expressed as scheduled tasks with skill/risk rolls:
+
+**Site security rating.** Each site has a numeric `security_rating`
+computed from:
+
+- Physical assets on-site: armed PMSC contracts, MTF squads, perimeter drones,
+  aircraft patrols overhead, ships/submarines offshore, hardened shelter tier
+  (tent → office_closet → bunker_shallow → underground → oil_platform →
+  subsea_pod → antarctica).
+- Current infiltrator count — enemy agents placed by GOIs reduce the effective
+  rating. Counterintel staff + periodic sweeps find and remove them.
+- Network hardening (encryption level + IDS posture + air-gap).
+- Rating gates: GOI raid rolls, defection attempts, external scan leaks.
+
+**Infohazard outbreaks.** A failed containment (scan bust, VM escape,
+archive-leak) can seed an outbreak at the site. Outbreaks have:
+
+- Detection radius (miles) — grows over time if uncontained.
+- Memetic signature — specific to the infohazard's class/strength.
+- Casualty / reputation damage per tick.
+
+**Surveillance aircraft** (MPA, HAPS, ISR UAV, JSTARS-class AEW) can be
+tasked to monitor regions. Their sensor radius and loiter time determine how
+fast outbreaks are detected. Higher-tier sensors see memetic/anomalous
+signatures invisible to civilian satellites.
+
+**Field agent dispatch.** MTF squads can be airlifted (helo, tiltrotor, C-130
+airdrop) or sealifted (RHIB, LCAC) to outbreak sites. Field operations roll
+against: MTF training, gear, SCP hazard strength, local terrain. Outcomes:
+contained / partial / failed / casualties / exposure.
+
+**Deployable portable container DCs.** MobiDCs and containerized compute pods
+can be air-dropped or ship-delivered to outbreak sites to run local scanners
+and stand up a forward VM rack for real-time analysis. Acts like a temporary
+site with its own power/cooling/network (often starstream or LTE).
+
+**Submarines as ultra-secure storage.** SSBN-class and Typhoon-class hulls
+converted to archive pods — highest-tier physical shielding, mobile, hard to
+locate. Only suitable for the most dangerous archived SCPs (Keter / heavy
+memetic). Very limited capacity, very high operating cost, very long
+transit for retrieval.
+
+**Submarine ISR on rival naval assets.** SSN/SSGN + towed array → track GOI
+ships and SSBNs. Intel outputs: position updates, acoustic fingerprints,
+payload hints. Feeds the adversary-intel fog-of-war system (§24.4).
+
+**Infohazard-derived intel.** Successful analysis of certain infohazards
+yields intel on rival GOIs: known personnel, site locations, security
+postures, equipment rosters. This seeds the targeting data for:
+
+**MTF assault on rival GOI sites.** Late-game capability requiring
+multi-domain planning: ISR (where is the site + security level) → insertion
+(airborne or amphibious) → breach + data exfil → secure the archive to a
+friendly submarine or subsea pod → destroy the site (demolitions). Each phase
+is its own skill roll; failures cascade.
+
+**Torpedoes & naval weapons.** Submarines can purchase torpedoes (heavyweight,
+lightweight) and cruise missiles. Used against hostile sea assets (GOI ships,
+rival submarines, oil platforms used as enemy sites). Surface combatants carry
+anti-ship missiles and CIWS. Engagements resolved as acoustic-duel / BVR
+missile exchanges with skill + stealth + ECM rolls.
+
+**Oil platform gameplay hooks.** Beyond being a buildable site, oil platforms
+are prime MTF assault targets when rivals hold them — the helipad + sea
+approaches make them assault-friendly, and they often house valuable archives
+(seawater cooling attracts rival black-site builders).
+
+**Rival GOI site model.** GOIs own sites with the same attributes yours do
+(power, cooling, network, archive). Intel from infohazards, SIGINT, and
+submarine ISR populates your partial view. Successful MTF raids remove GOI
+sites from the map and transfer their archive to you.
+
+None of the above is implemented yet — this section captures design intent so
+future phases (12+) can land against a clear vision.
+
 ---
 
 ## 25. Technical architecture
