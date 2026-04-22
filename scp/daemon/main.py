@@ -513,6 +513,24 @@ class Daemon:
                 "payload": {"cooling_units": self.journal.list_cooling_units()},
             }
 
+        if mtype == "list_tape_drives":
+            return {
+                "type": "list_tape_drives",
+                "payload": {"tape_drives": self.journal.list_tape_drives()},
+            }
+
+        if mtype == "list_tape_libraries":
+            return {
+                "type": "list_tape_libraries",
+                "payload": {"tape_libraries": self.journal.list_tape_libraries()},
+            }
+
+        if mtype == "list_storage_arrays":
+            return {
+                "type": "list_storage_arrays",
+                "payload": {"storage_arrays": self.journal.list_storage_arrays()},
+            }
+
         if mtype == "list_outages":
             return {
                 "type": "list_outages",

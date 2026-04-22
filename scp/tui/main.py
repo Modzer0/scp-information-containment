@@ -146,6 +146,8 @@ HELP_TOPICS = {
             ("power_plants", "Installed power plants (gensets, solar, reactors)"),
             ("cooling", "Installed cooling units (CRAC / RDHX / chiller / DLC / immersion)"),
             ("pumps", "Installed dewatering pumps (required at underground sites)"),
+            ("tapes", "Tape drives + purchased tape libraries (archive targets by site_id)"),
+            ("arrays", "Storage arrays (working quarantine capacity by site_id)"),
             ("outages", "Active grid / ISP outages"),
             ("trigger_outage <site> [h]", "Force an outage for testing"),
             ("ping", "Daemon round-trip"),
@@ -964,6 +966,60 @@ class ScpTui(App):
                 }
             )
             self._log_reply("trigger_outage", reply)
+            return
+
+        if verb in ("tapes", "tape_drives", "tape_libraries"):
+            # Unified listing: bootstrap tape drives + purchased tape libraries.
+            # Each row shows the site_id you'd use as the archive target.
+            drives_reply = await self.client.send({"type": "list_tape_drives"})
+            libs_reply = await self.client.send({"type": "list_tape_libraries"})
+            drives = drives_reply.get("payload", {}).get("tape_drives", [])
+            libs = libs_reply.get("payload", {}).get("tape_libraries", [])
+            if not drives and not libs:
+                self._log("[dim]no tape drives or libraries installed[/]")
+                return
+            if drives:
+                self._log("[bold]tape drives:[/]")
+                for d in drives:
+                    self._log(
+                        f"  [cyan]drive #{d['id']:<3}[/] {d['name']:20s} "
+                        f"@site {d['site_id']}"
+                    )
+            if libs:
+                self._log("[bold]tape libraries (purchased):[/]")
+                for lb in libs:
+                    cap_gb = lb["capacity_gb"]
+                    if cap_gb >= 1_000_000:
+                        cap_str = f"{cap_gb/1_000_000:.1f} PB"
+                    else:
+                        cap_str = f"{cap_gb/1_000:.0f} TB"
+                    self._log(
+                        f"  [cyan]library #{lb['id']:<3}[/] {lb['sku']:25s} "
+                        f"{cap_str:>10}  @site {lb['site_id']}  [{lb['status']}]"
+                    )
+            self._log(
+                "[dim]archive target any site_id above — cross-site transmission "
+                "scales with link bandwidth[/]"
+            )
+            return
+
+        if verb in ("arrays", "storage_arrays"):
+            reply = await self.client.send({"type": "list_storage_arrays"})
+            arrays = reply.get("payload", {}).get("storage_arrays", [])
+            if not arrays:
+                self._log("[dim]no storage arrays installed[/]")
+                return
+            self._log("[bold]storage arrays (working storage):[/]")
+            for a in arrays:
+                cap_gb = a["capacity_gb"]
+                if cap_gb >= 1_000_000:
+                    cap_str = f"{cap_gb/1_000_000:.1f} PB"
+                else:
+                    cap_str = f"{cap_gb/1_000:.0f} TB"
+                self._log(
+                    f"  [cyan]#{a['id']:<3}[/] {a['array_type']:6s} {cap_str:>10}  "
+                    f"@site {a['site_id']}  {a['sku']:25s} [{a['status']}]"
+                )
             return
 
         if verb == "cooling":
