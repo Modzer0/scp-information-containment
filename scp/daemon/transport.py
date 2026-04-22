@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+from . import network as _network
 from .clock import iso, now_utc
 from .journal import Journal
 
@@ -65,6 +66,22 @@ _add(TransportMethod(
     cost_per_move=2_000,
     description="Cross-ocean bulk. Slowest, cheapest per move.",
 ))
+# 'data_link' duration is computed at runtime from the slower of the two
+# sites' network bandwidth; cost is a base handshake fee plus $100/GB of
+# payload (bandwidth isn't free). Must clear an encryption floor gated by
+# the item's hazard class (Keter → type1, Euclid → hardware, Safe →
+# software; unencrypted sites refuse outright). No physical transit.
+_add(TransportMethod(
+    "data_link", "Encrypted data-link transmission",
+    duration_s=0,                      # computed per-transfer
+    cost_per_move=500,                 # base handshake + tape write; +$100/GB
+    description=(
+        "Send the archive over an encrypted site-to-site link. Duration scales "
+        "with the slower link bandwidth; no physical logistics. Both sites must "
+        "meet the class-gated encryption floor (Safe=software, Euclid=hardware, "
+        "Keter=type1). Cost = $500 base + $100/GB bandwidth."
+    ),
+))
 
 
 def list_methods() -> list[TransportMethod]:
@@ -108,17 +125,73 @@ def transfer_item(
     if not any(s["id"] == to_site_id for s in journal.list_sites()):
         raise ValueError(f"no site with id {to_site_id}")
 
-    # Owned aircraft cuts the air-charter rate in half — you're using
-    # your own hull instead of chartering a commercial flight. Same logic
-    # for sea transport when you own a ship.
+    # Duration is fixed by method except for data_link, which scales with
+    # the slower of src/dst bandwidth against item size.
+    duration_s = float(method.duration_s)
     effective_cost = method.cost_per_move
     owned_discount = False
-    if method_id == "air" and journal.count_aircraft() > 0:
-        effective_cost = method.cost_per_move // 2
-        owned_discount = True
-    elif method_id == "sea" and journal.count_ships() > 0:
-        effective_cost = method.cost_per_move // 2
-        owned_discount = True
+    transmission_s_unscaled = 0.0
+    bandwidth_mbps_used = 0
+
+    if method_id == "data_link":
+        # Encryption floor gated by item hazard class.
+        item_class = item.get("class", "Safe")
+        required_enc = _network.MIN_ENCRYPTION_FOR_CLASS.get(
+            item_class, "software"
+        )
+        required_rank = _network.encryption_rank(required_enc)
+        src_enc = journal.get_site_encryption(int(from_site_id)) or "none"
+        dst_enc = journal.get_site_encryption(int(to_site_id)) or "none"
+        if _network.encryption_rank(src_enc) < required_rank:
+            raise ValueError(
+                f"source site encryption '{src_enc}' below "
+                f"'{required_enc}' required for {item_class}"
+            )
+        if _network.encryption_rank(dst_enc) < required_rank:
+            raise ValueError(
+                f"destination site encryption '{dst_enc}' below "
+                f"'{required_enc}' required for {item_class}"
+            )
+
+        # Bandwidth-scaled transmission time.
+        src_tier = _network.get(
+            journal.get_site_network(int(from_site_id)) or "business_fiber"
+        )
+        dst_tier = _network.get(
+            journal.get_site_network(int(to_site_id)) or "business_fiber"
+        )
+        if src_tier is None or dst_tier is None:
+            raise ValueError("both sites must have a network tier set")
+        min_mbps = min(src_tier.bandwidth_mbps, dst_tier.bandwidth_mbps)
+        bandwidth_mbps_used = min_mbps
+        # Mbps × 0.000125 → GB/s; 80% protocol efficiency
+        gb_per_s = max(min_mbps * 0.000125 * 0.8, 1e-6)
+        size_gb = float(item.get("size_gb", 0) or 0)
+        transmission_s_unscaled = size_gb / gb_per_s
+        duration_s = transmission_s_unscaled * _TS
+
+        # Cost: base handshake fee + $100/GB bandwidth.
+        effective_cost = method.cost_per_move + int(size_gb * 100)
+
+        # Destination must have tape headroom to land the copy.
+        from . import procurement as _procurement
+        util_dst = _procurement.site_utilization(journal, int(to_site_id))
+        tape_free = util_dst.get("tape_cap_gb", 0) - util_dst.get("tape_used_gb", 0)
+        if size_gb > tape_free + 0.01:
+            raise ValueError(
+                f"destination tape capacity too low: need {size_gb:.1f} GB, "
+                f"free {tape_free:.1f} GB"
+            )
+    else:
+        # Owned aircraft cuts the air-charter rate in half — you're using
+        # your own hull instead of chartering a commercial flight. Same logic
+        # for sea transport when you own a ship.
+        if method_id == "air" and journal.count_aircraft() > 0:
+            effective_cost = method.cost_per_move // 2
+            owned_discount = True
+        elif method_id == "sea" and journal.count_ships() > 0:
+            effective_cost = method.cost_per_move // 2
+            owned_discount = True
 
     current = journal.get_funding()
     if current < effective_cost:
@@ -130,38 +203,29 @@ def transfer_item(
     journal.set_item_state(item_id, "in_transit", current_vm_id=None)
     journal.set_item_transit(item_id, to_site_id)
 
-    eta = now_utc() + timedelta(seconds=method.duration_s)
+    eta = now_utc() + timedelta(seconds=duration_s)
     sid = schedule_fn(
         eta,
         "transit_complete",
         {"item_id": item_id},
     )
-    journal.append(
-        "transit_started",
-        "INFO",
-        {
-            "item_id": item_id,
-            "from_site_id": from_site_id,
-            "to_site_id": to_site_id,
-            "method": method_id,
-            "cost": effective_cost,
-            "owned_discount": owned_discount,
-            "balance": balance,
-            "eta": iso(eta),
-            "scheduled_id": sid,
-        },
-    )
-    return {
+    entry = {
         "item_id": item_id,
         "from_site_id": from_site_id,
         "to_site_id": to_site_id,
         "method": method_id,
         "cost": effective_cost,
         "owned_discount": owned_discount,
-        "eta": iso(eta),
         "balance": balance,
+        "eta": iso(eta),
         "scheduled_id": sid,
     }
+    if method_id == "data_link":
+        entry["transmission_s_unscaled"] = round(transmission_s_unscaled, 2)
+        entry["bandwidth_mbps"] = bandwidth_mbps_used
+    journal.append("transit_started", "INFO", entry)
+    result = dict(entry)
+    return result
 
 
 def on_transit_complete(journal: Journal, item_id: int) -> dict:

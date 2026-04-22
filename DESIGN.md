@@ -1264,6 +1264,14 @@ Open decision — see §27 — whether sub modules and air mission pallets share
 - **Ground** — truck, rail; cheap, slow, most visible
 - **Sea** — ship, sub, UUV; slow, least visible, long endurance
 - **Air** — plane, heli, UAV; fast, expensive, medium-visible
+- **Data-link** — encrypted site-to-site transmission of archived items.
+  No physical logistics. Duration scales with the slower of the two sites'
+  network bandwidth; cost = flat handshake + $100/GB. Gated by an
+  encryption floor keyed to item hazard class (Safe → software, Euclid →
+  hardware, Keter → type1). Destination must have tape headroom for the
+  payload. Best for consolidating archived libraries onto high-security
+  sites (subsea pod, underground bunker, Antarctica) without exposing
+  physical tapes to ambushes, sea pirates, or customs inspection.
 
 ### 21.2 Contracts
 

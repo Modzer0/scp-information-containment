@@ -38,8 +38,8 @@ HELP_TOPICS = {
             ("aircraft", "List owned aircraft"),
             ("ships", "List owned surface ships"),
             ("submarines", "List owned submarines"),
-            ("transport_methods", "Show truck / air / rail / sea methods"),
-            ("transfer_item <ids> <site> [method]", "Ship archived items between sites.  ids: 5 | 3-7 | 1,3,9"),
+            ("transport_methods", "Show truck / air / rail / sea / data_link methods"),
+            ("transfer_item <ids|all> <site> [method]", "Ship archived items between sites.  data_link = encrypted network transmission"),
             ("relocate_host <host> <site> [method]", "Move compute between sites"),
             ("reassign_staff <ids> <site>", "Send staff between sites.  ids: 2 | 2-5 | 1,3,7"),
         ],
@@ -1140,9 +1140,11 @@ class ScpTui(App):
             if len(parts) < 3:
                 self._log(
                     "[yellow]usage: transfer_item <item_id|range|list|all> "
-                    "<to_site_id> [method][/]\n"
+                    "<to_site_id> [truck|air|rail|sea|data_link][/]\n"
                     "[dim]  examples: transfer_item 5 2  |  transfer_item 3-7 2 sea  |  "
-                    "transfer_item 1,3,9 2  |  transfer_item all 2[/]"
+                    "transfer_item 1,3,9 2  |  transfer_item all 2 data_link[/]\n"
+                    "[dim]  data_link = encrypted site-to-site transmission (no physical transit); "
+                    "duration scales with bandwidth, both sites must meet the class-gated encryption floor.[/]"
                 )
                 return
             to_site = int(parts[2])
