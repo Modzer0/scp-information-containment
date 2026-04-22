@@ -1,0 +1,23 @@
+[project]
+name = "scp-information-containment"
+version = "0.0.1"
+description = "Terminal-based real-clock information-containment operations simulator"
+requires-python = ">=3.11"
+dependencies = [
+    "textual>=0.80",
+    "plyer>=2.1",
+]
+
+[project.optional-dependencies]
+windows = ["win10toast>=0.9"]
+
+[project.scripts]
+scp = "scp.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["scp*"]
