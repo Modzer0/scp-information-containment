@@ -169,6 +169,8 @@ Type `quit` to exit the TUI (daemon keeps running).
 **Operations + autonomy**
 - Staff: player + 2 NPCs at bootstrap; XP per action with diminishing returns
 - Training: 6 courses with real-clock durations + prereq chains
+- **Recruitment**: 10 hireable roles (analyst → senior memeticist → reactor operator → fixed/rotary pilot → scientist) with sourcing lead times (weeks to months) and annual salaries
+- **Weekly payroll**: scheduled `payroll_run` deducts weekly share of every NPC's annual wage from funding; shortfall → ALERT with balance going negative
 - Contracts: recurring billing for scanner feeds, diesel, Jet-A, bunker fuel
 - Playbooks: per-site auto-rules so the sim keeps working while you sleep
 

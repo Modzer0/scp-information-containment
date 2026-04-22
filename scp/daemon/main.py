@@ -4,7 +4,10 @@ import asyncio
 import random
 from pathlib import Path
 
-from . import contracts, gameplay, network, outages, playbooks, procurement, sites, training, transport
+from . import (
+    contracts, gameplay, network, outages, payroll, playbooks, procurement,
+    recruitment, sites, training, transport,
+)
 from .clock import from_iso, iso, now_utc
 from .hardware import catalog as hw_catalog
 from .ipc import IpcServer
@@ -180,6 +183,32 @@ class Daemon:
                     self.journal, outage_id=int(payload["outage_id"])
                 )
                 message = f"grid outage #{result['outage_id']} resolved"
+
+            elif kind == "hire_complete":
+                result = recruitment.on_hire_complete(
+                    self.journal,
+                    role_id=str(payload["role_id"]),
+                    candidate_name=str(payload["candidate_name"]),
+                    target_site_id=int(payload["target_site_id"]),
+                )
+                message = (
+                    f"{result.get('name')} joins as {result.get('role_id')} "
+                    f"@ ${result.get('annual_salary', 0):,}/yr"
+                )
+
+            elif kind == "payroll_run":
+                result = payroll.on_payroll_run(self.journal, self.scheduler.add)
+                if result.get("shortfall"):
+                    severity = "ALERT"
+                    message = (
+                        f"payroll shortfall: balance ${result['balance_after']:,} "
+                        f"(paid ${result['weekly_total']:,} to {result['staff_paid']} staff)"
+                    )
+                else:
+                    message = (
+                        f"payroll: -${result['weekly_total']:,} "
+                        f"({result['staff_paid']} staff)"
+                    )
 
             elif kind == "contract_billing":
                 result = contracts.on_billing(
@@ -686,6 +715,29 @@ class Daemon:
                 },
             }
 
+        if mtype == "roles":
+            return {
+                "type": "roles",
+                "payload": {
+                    "roles": [r.to_dict() for r in recruitment.list_roles()]
+                },
+            }
+
+        if mtype == "recruit":
+            return {
+                "type": "ack",
+                "payload": recruitment.recruit(
+                    self.journal,
+                    self.scheduler.add,
+                    role_id=str(payload["role_id"]),
+                    rng=self.rng,
+                    target_site_id=(
+                        int(payload["target_site_id"])
+                        if payload.get("target_site_id") is not None else None
+                    ),
+                ),
+            }
+
         if mtype == "courses":
             return {
                 "type": "courses",
@@ -737,8 +789,11 @@ class Daemon:
         self.journal.append("daemon_start", "INFO", {"time": iso(now_utc())})
         # Make sure at least one outage roll is queued; rehydrate covers
         # follow-ons once one has been scheduled.
-        if not any(p["kind"] == "outage_roll" for p in self.journal.pending()):
+        pending_kinds = {p["kind"] for p in self.journal.pending()}
+        if "outage_roll" not in pending_kinds:
             outages.schedule_next_roll(self.scheduler.add)
+        if "payroll_run" not in pending_kinds:
+            payroll.schedule_next_payroll(self.scheduler.add)
         print(
             f"SCP daemon listening on {self.ipc.host}:{self.ipc.port}, "
             f"db {self.journal.db_path}"

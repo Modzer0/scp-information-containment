@@ -421,6 +421,113 @@ Diesel / propane / Jet-A / MGO contracts have:
 
 Lapse = brownout → corrupted in-flight analyses → mistake cascade.
 
+### 12.4 Reactor accidents, refueling, spent-fuel storage (future phase)
+
+Reactors are serious infrastructure. This section formalizes the accident,
+maintenance, and waste-handling layers — **not yet implemented**; the
+current catalog has reactor SKUs with `passive_safety` metadata ready to
+drive these mechanics.
+
+#### Accident taxonomy
+
+| Event | PWR / SMR | MSR | Gameplay signal |
+|---|---|---|---|
+| Loss-of-coolant (LOCA) | Possible; pressurized steam blowdown; requires ECCS | Not applicable — atmospheric primary, freeze-plug drain | PWR: BREACH; MSR: NOTICE (clean drain) |
+| Fuel damage / cladding breach | Plausible at high burnup | Fuel is already liquid; cleanup = salt decon | PWR: ALERT with contamination radius; MSR: NOTICE |
+| Primary loop rupture | Catastrophic — site evacuation | No high-pressure loop; contained drain | PWR: BREACH; MSR: NOTICE |
+| External event (seismic, flood) | Depends on site hardening | Same hardening; salt solidifies if power lost | Both: severity scaled by hardening |
+| Operator error (control-rod mis-trip) | Can scram; recoverable if caught fast | MSR drains and waits for restart | PWR: ALERT; MSR: NOTICE |
+| ASAT / kinetic attack on site | Catastrophic regardless of reactor type | — | BREACH; see threat model §24 |
+
+**Annual per-reactor base rate (target design target):**
+- PWR microreactor: ~0.5% / year of some incident class
+- Mobile SMR (PWR): ~0.3% / year
+- Deployable SMR (PWR): ~0.2% / year
+- MSR (μ or SMR): ~0.15% / year — and when one occurs, severity is usually one tier lower than PWR equivalent
+
+Rolls happen on a `reactor_incident_roll` scheduler event (analogous to
+existing `outage_roll`). Severity determines journal severity + site
+response requirements.
+
+#### Cleanup procedure
+
+On an active-severity incident (ALERT or BREACH):
+
+1. **Immediate** — site reports `reactor_incident_active`; affected
+   power_plant goes `status='offline'`. Effective power capacity drops.
+2. **Exclusion zone** — staff at the affected site are placed on
+   stand-down (new status `quarantined_reactor` or similar) for the
+   duration of hot-zone work. Cannot act as operators.
+3. **Response crew** — requires `reactor_operator` + `forensics` staff
+   assigned. Cleanup duration scales with severity tier:
+   - NOTICE: 1–3 days (MSR typical)
+   - ALERT: 1–4 weeks (PWR fuel cladding damage)
+   - BREACH: 3–12 months (primary rupture; may end the site)
+4. **Return to service** — if recoverable, reactor status flips to
+   `refueling` or `cold_shutdown` depending on damage. Full restart
+   requires operator re-certification on the specific unit.
+5. **Irrecoverable** — reactor marked `decommissioned`; spent fuel
+   proceeds to storage (below). Site capacity is permanently reduced
+   unless another plant is installed.
+
+#### Refueling operations
+
+Each reactor has a fuel cycle; refueling is scheduled maintenance that
+takes the reactor offline for a fixed duration:
+
+| Reactor | Cycle | Outage duration | Fuel cost |
+|---|---|---|---|
+| `kilopower-micro` | 10 yr | 2 weeks | $500k |
+| `evinci-mobile-smr` | 3–7 yr | 3 weeks | $5M |
+| `nuscale-smr` | 18–24 months | 30–40 days | $15M |
+| `msr-micro` | continuous salt cleanup + yearly top-up | 3–5 days | $2M/yr |
+| `msr-smr` | continuous + 6-month salt service | 1 week | $8M/yr |
+
+Scheduled `refueling_due` event; player schedules a `refueling_start`
+during a low-load window. If refueling is overdue, reactor derates
+then shuts down.
+
+Refueling **requires licensed reactor operators** on staff (new hard
+gate — current catalog already declares `requires_licensed_ops` per
+reactor SKU). Existing `reactor_operator` recruitment role (currently
+implemented for hiring) feeds into this.
+
+#### Spent-fuel storage
+
+Waste products accumulate. Real-world stages:
+
+1. **Spent fuel pool** — 5+ years of active cooling; wet storage on-site
+2. **Dry cask storage** — multi-decade interim storage; passively cooled
+3. **Geological repository** — final disposal (decades out, expensive)
+
+In-game minimum viable:
+
+- New `spent_fuel` entity table: `{id, reactor_id, removed_at, stage,
+  site_id}` tracking individual assemblies
+- New site_module SKU category `waste_storage`:
+  - `pool-wet-storage` — short-term; cheap; small capacity
+  - `dry-cask-vault` — long-term interim; medium capacity
+  - `geological-repository` — plot-gated; unlimited; multi-year
+    acquisition project (akin to yard relationships, §22)
+- Each reactor refueling produces N spent-fuel assemblies that must
+  land in a storage unit at the site or transit to another site with
+  capacity (like item transit)
+- Overflow: spent fuel in the refueling floor triggers `NRC-style`
+  regulatory event (political cost)
+
+#### Gameplay shape
+
+A mature operation running reactors plans like a real nuclear fleet:
+- Cycle stagger across multiple reactors so only one is down at a time
+- Redundant pumps + backup gensets prevent station-blackout scenarios
+  from becoming fuel-damage events
+- MSR-tier sites handle Keter-scale work with lower accident exposure
+- Spent-fuel logistics becomes a multi-decade background project
+
+This design is ready to land whenever the operator wants; schema
+needs a `spent_fuel` table, a `waste_storage` SKU category, and
+`reactor_incident_roll` / `refueling_*` scheduled event kinds.
+
 ---
 
 ## 13. Facilities (land)

@@ -79,9 +79,11 @@ HELP_TOPICS = {
         ],
     },
     "staff": {
-        "title": "Staff + training",
+        "title": "Staff + training + recruitment",
         "commands": [
             ("staff", "List roster with skills + clearance"),
+            ("roles", "List hireable roles (cost, salary, lead time)"),
+            ("recruit <role> [site]", "Post a requisition; hire lands at ETA"),
             ("courses", "Training courses with prereqs"),
             ("enroll <staff> <course>", "Start training"),
             ("enrollments", "Training in flight + graduations"),
@@ -1118,6 +1120,37 @@ class ScpTui(App):
             self._log_reply("cancel_contract", reply)
             return
 
+        if verb == "roles":
+            reply = await self.client.send({"type": "roles"})
+            roles = reply.get("payload", {}).get("roles", [])
+            for r in roles:
+                lead = r.get("lead_time_s", 0)
+                if lead < 86_400:
+                    lead_s = f"{lead/3600:.0f}h"
+                else:
+                    lead_s = f"{lead/86_400:.0f}d"
+                skills = " ".join(f"{k}={v}" for k, v in r.get("skills", {}).items())
+                self._log(
+                    f"[cyan]{r['role_id']:22s}[/] {r['display_name']:30s} "
+                    f"{humanize_money(r['recruit_cost_usd']):>8} "
+                    f"+ {humanize_money(r['annual_salary_usd']):>8}/yr  "
+                    f"lead={lead_s:<4}  L{r['clearance']}  [{skills}]"
+                )
+            return
+
+        if verb == "recruit":
+            if len(parts) < 2:
+                self._log("[yellow]usage: recruit <role_id> [site_id][/]")
+                return
+            recruit_payload: dict = {"role_id": parts[1]}
+            if len(parts) > 2:
+                recruit_payload["target_site_id"] = int(parts[2])
+            reply = await self.client.send(
+                {"type": "recruit", "payload": recruit_payload}
+            )
+            self._log_reply("recruit", reply)
+            return
+
         if verb == "courses":
             reply = await self.client.send({"type": "courses"})
             courses = reply.get("payload", {}).get("courses", [])
@@ -1393,6 +1426,21 @@ class ScpTui(App):
             )
         if kind == "contract_billing":
             return f"contract #{payload.get('contract_id')}"
+        if kind == "hire_complete":
+            return (
+                f"{payload.get('name')} as {payload.get('role_id')} "
+                f"(${payload.get('annual_salary', 0):,}/yr)"
+            )
+        if kind == "payroll_run":
+            return (
+                f"${payload.get('weekly_total', 0):,} across "
+                f"{payload.get('staff_paid', 0)} staff"
+            )
+        if kind == "recruitment_ordered":
+            return (
+                f"{payload.get('candidate_name')} ({payload.get('role_id')}) "
+                f"-${payload.get('recruit_cost', 0):,}"
+            )
         # Journal-side events
         if kind == "scan_started":
             return ""
@@ -1556,6 +1604,12 @@ class ScpTui(App):
         if verb == "enroll":
             return (
                 f"{p.get('staff_name')} → {p.get('course')}  "
+                f"balance {humanize_money(p.get('balance', 0))}  "
+                f"ETA {humanize_eta(p.get('eta'))}"
+            )
+        if verb == "recruit":
+            return (
+                f"candidate {p.get('candidate_name')} ({p.get('role_id')}) — "
                 f"balance {humanize_money(p.get('balance', 0))}  "
                 f"ETA {humanize_eta(p.get('eta'))}"
             )
