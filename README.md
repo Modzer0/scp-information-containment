@@ -176,11 +176,20 @@ Type `quit` to exit the TUI (daemon keeps running).
 - Textual with unicode widgets — clock, status bar, scrollable log, command input
 - Live event stream over a second socket (push events appear as `●` rows)
 - Status bar: funding, pending, contracts, outages, alerts — refreshes on event + 3s tick
-- Topic-organized `help` (9 topics, 48 commands)
+- Topic-organized `help` (9 topics, 48+ commands)
 - Humanized time + money (`in 2h 14m`, `$1.05M`)
 - Detail views: `item <id>`, `vm <id>` (containment component bars), `host <id>`
+- `archived` lists archive contents with size + site location (separate from active `items`)
+- **Prefix matching** — type a unique prefix (`arc` → archive, `sit` → sitrep, `sub` → submarines); ambiguous prefixes show candidates
+- **Up/down arrow command history** (200 entries)
 - Typo suggestions + auto-reconnect on daemon drop
 - Optional Discord webhook for alerts
+
+**Archive mechanics**
+- Archived items are separated from the active `items` list — `archived` command browses them with site location + size + encryption status
+- `archive <item_id>` archives at the item's current site (fast, base 30 s scaled)
+- `archive <item_id> <target_site_id>` routes to another site; transmission time = `size_gb / (min_bandwidth_mbps × 0.0001 × 0.8)` seconds
+- Transmission cost: a 5 TB Keter item over GEO sat (30 Mbps) takes real hours; over dark fiber (40 Gbps) takes seconds
 
 ## Project layout
 

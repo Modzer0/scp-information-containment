@@ -85,6 +85,7 @@ class Daemon:
                     self.journal,
                     item_id=int(payload["item_id"]),
                     operator_id=payload.get("operator_id"),
+                    target_site_id=payload.get("target_site_id"),
                 )
                 message = (
                     f"{result.get('designation')} archived; "
@@ -364,6 +365,10 @@ class Daemon:
                     self.scheduler.add,
                     item_id=int(payload["item_id"]),
                     operator_id=payload.get("operator_id"),
+                    target_site_id=(
+                        int(payload["target_site_id"])
+                        if payload.get("target_site_id") is not None else None
+                    ),
                 ),
             }
 

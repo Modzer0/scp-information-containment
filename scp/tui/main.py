@@ -12,7 +12,10 @@ from .events import SubscriptionClient
 from .format import humanize_duration, humanize_eta, humanize_money
 
 
-HINT = "type 'help' for commands, 'sitrep' for a full dashboard, 'next' for imminent events"
+HINT = (
+    "type 'help' for commands · 'sitrep' for dashboard · 'next' for schedule  "
+    "| ↑/↓ history · prefixes auto-complete (e.g. 'sit', 'arc')"
+)
 
 
 HELP_TOPICS = {
@@ -20,11 +23,12 @@ HELP_TOPICS = {
         "title": "Operations",
         "commands": [
             ("scan", "Start a scan; candidates surface at completion"),
-            ("items [state]", "List items (filter: candidate|quarantined|analyzed|archived|...)"),
+            ("items [state]", "List ACTIVE items (archived ones live under `archived`)"),
+            ("archived", "Browse archived items with size + site location"),
             ("item <id>", "Full detail for a single item"),
             ("acquire <item>", "Move a candidate to quarantine"),
             ("analyze <item> <vm> [override]", "Analyze an item on a VM (override bypasses soft rail)"),
-            ("archive <item>", "Archive an analyzed item; funding awarded"),
+            ("archive <item> [site]", "Archive analyzed item; optional target site = cross-site transmission"),
             ("wipe <host>", "Forensic wipe + reprovision a compromised host"),
         ],
     },
@@ -107,6 +111,7 @@ HELP_TOPICS = {
             ("recent", "Recent journal entries"),
             ("pending", "Scheduled events not yet fired"),
             ("power_plants", "Installed power plants (gensets, solar, reactors)"),
+            ("pumps", "Installed dewatering pumps (required at underground sites)"),
             ("outages", "Active grid / ISP outages"),
             ("trigger_outage <site> [h]", "Force an outage for testing"),
             ("ping", "Daemon round-trip"),
@@ -131,6 +136,8 @@ class ScpTui(App):
     BINDINGS = [
         ("ctrl+c", "quit", "Quit"),
         ("ctrl+d", "quit", "Quit"),
+        ("up", "history_prev", "history ↑"),
+        ("down", "history_next", "history ↓"),
     ]
 
     def __init__(self) -> None:
@@ -143,6 +150,10 @@ class ScpTui(App):
         self._known_verbs: list[str] = []
         # Pending verification prompt (set when an action requires YES to proceed)
         self._pending_confirm: str | None = None
+        # Command history (up/down arrows). Most-recent at end; idx -1 = editing new.
+        self._history: list[str] = []
+        self._history_idx: int = -1
+        self._HISTORY_MAX = 200
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -280,6 +291,12 @@ class ScpTui(App):
         event.input.value = ""
         if not cmd:
             return
+        # Record in history (no consecutive duplicates)
+        if not self._history or self._history[-1] != cmd:
+            self._history.append(cmd)
+            if len(self._history) > self._HISTORY_MAX:
+                self._history.pop(0)
+        self._history_idx = -1
         try:
             await self.execute(cmd)
         except (ConnectionError, BrokenPipeError) as exc:
@@ -287,6 +304,35 @@ class ScpTui(App):
             await self._reconnect()
         except Exception as exc:
             self._log(f"[red]err: {exc}[/]")
+
+    def action_history_prev(self) -> None:
+        if not self._history:
+            return
+        try:
+            inp = self.query_one("#cmd", Input)
+        except Exception:
+            return
+        if self._history_idx < 0:
+            self._history_idx = len(self._history) - 1
+        else:
+            self._history_idx = max(0, self._history_idx - 1)
+        inp.value = self._history[self._history_idx]
+        inp.cursor_position = len(inp.value)
+
+    def action_history_next(self) -> None:
+        try:
+            inp = self.query_one("#cmd", Input)
+        except Exception:
+            return
+        if self._history_idx < 0:
+            return
+        if self._history_idx >= len(self._history) - 1:
+            self._history_idx = -1
+            inp.value = ""
+        else:
+            self._history_idx += 1
+            inp.value = self._history[self._history_idx]
+        inp.cursor_position = len(inp.value)
 
     async def _do_reset(self) -> None:
         try:
@@ -348,6 +394,14 @@ class ScpTui(App):
 
         parts = cmd.split()
         verb = parts[0].lower()
+
+        # Prefix matching: if verb is a unique prefix of a known command,
+        # resolve to the full name. Ambiguous prefixes surface a hint.
+        resolved = self._resolve_prefix(verb)
+        if resolved == "__ambiguous__":
+            return  # hint already logged
+        if resolved is not None and resolved != verb:
+            verb = resolved
 
         if verb in ("quit", "exit"):
             self.exit()
@@ -441,10 +495,47 @@ class ScpTui(App):
                 {"type": "list_items", "payload": {"state": state} if state else {}}
             )
             items = reply.get("payload", {}).get("items", [])
-            if not items:
-                self._log("[dim]no items[/]")
+            # By default, hide archived — they live in the `archived` list.
+            if state is None:
+                items = [i for i in items if i.get("state") != "archived"]
+                if not items:
+                    self._log("[dim]no active items  (type 'archived' to see archives)[/]")
+            elif not items:
+                self._log(f"[dim]no items in state '{state}'[/]")
             for it in items:
                 self._log(self._fmt_item(it))
+            return
+
+        if verb == "archived":
+            # Dedicated archive browser with size + location resolution.
+            reply = await self.client.send(
+                {"type": "list_items", "payload": {"state": "archived"}}
+            )
+            items = reply.get("payload", {}).get("items", [])
+            if not items:
+                self._log("[dim]no archived items[/]")
+                return
+            # Map site_id → name for readability
+            sites_reply = await self.client.send({"type": "sitrep"})
+            sites = sites_reply.get("payload", {}).get("sites", [])
+            site_name = {s["id"]: s["name"] for s in sites}
+            total_gb = 0.0
+            self._log(f"[bold]== archive ({len(items)} items) ==[/]")
+            for it in sorted(items, key=lambda x: x.get("current_site_id") or 0):
+                total_gb += float(it.get("size_gb", 0) or 0)
+                color = {
+                    "Safe": "green", "Euclid": "yellow", "Keter": "red",
+                }.get(it.get("class", ""), "white")
+                loc = site_name.get(
+                    it.get("current_site_id"), f"site {it.get('current_site_id')}"
+                )
+                enc = "🔒" if it.get("encrypted_at_rest") else "[red]!!unenc[/]"
+                self._log(
+                    f"  [{color}]{it['designation']:10s}[/] [{color}]{it['class']:6s}[/] "
+                    f"H={it['hazard_strength']:<2} "
+                    f"{it.get('size_gb', 0):>8.1f} GB  @{loc:<25s} {enc}"
+                )
+            self._log(f"  [dim]total archive size: {total_gb:,.1f} GB[/]")
             return
 
         if verb == "vms":
@@ -509,11 +600,12 @@ class ScpTui(App):
 
         if verb == "archive":
             if len(parts) < 2:
-                self._log("[yellow]usage: archive <item_id>[/]")
+                self._log("[yellow]usage: archive <item_id> [target_site_id][/]")
                 return
-            reply = await self.client.send(
-                {"type": "archive", "payload": {"item_id": int(parts[1])}}
-            )
+            payload: dict = {"item_id": int(parts[1])}
+            if len(parts) > 2:
+                payload["target_site_id"] = int(parts[2])
+            reply = await self.client.send({"type": "archive", "payload": payload})
             self._log_reply("archive", reply)
             return
 
@@ -1113,6 +1205,27 @@ class ScpTui(App):
         self._known_verbs = sorted(verbs)
         return self._known_verbs
 
+    def _resolve_prefix(self, verb: str) -> str | None:
+        """Return the full command name if `verb` is a unique prefix match.
+        If ambiguous, log the options and return None to fall through.
+        Exact matches return themselves unchanged."""
+        if not verb or len(verb) < 2:
+            return None
+        known = self._all_known_verbs()
+        if verb in known:
+            return verb
+        matches = [v for v in known if v.startswith(verb)]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            self._log(
+                f"[yellow]'{verb}' is ambiguous:[/] "
+                f"{', '.join(matches)}  [dim](type more letters)[/]"
+            )
+            # Signal caller to NOT run the unknown verb
+            return "__ambiguous__"
+        return None
+
     def _suggest_command(self, verb: str) -> None:
         matches = get_close_matches(verb, self._all_known_verbs(), n=3, cutoff=0.6)
         if matches:
@@ -1333,8 +1446,15 @@ class ScpTui(App):
         if verb == "acquire":
             return f"item {p.get('item_id')} → quarantined (operator {p.get('operator')})"
         if verb == "archive":
+            src = p.get("source_site_id")
+            dst = p.get("target_site_id")
+            route = (
+                f"same-site"
+                if src == dst
+                else f"site {src} → site {dst} ({p.get('size_gb', 0):.1f} GB)"
+            )
             return (
-                f"archiving... ETA {humanize_eta(p.get('eta'))}  "
+                f"archiving {route}... ETA {humanize_eta(p.get('eta'))}  "
                 f"operator={p.get('operator')}"
             )
         if verb == "wipe":

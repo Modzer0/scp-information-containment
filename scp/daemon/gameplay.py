@@ -6,6 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 import random as _random
+from datetime import timedelta
 
 from . import guardrail, incidents, mistakes, network, procurement
 from .clock import now_utc
@@ -419,6 +420,7 @@ def start_archive(
     schedule_fn: Any,
     item_id: int,
     operator_id: int | None = None,
+    target_site_id: int | None = None,
 ) -> dict:
     op = _resolve_operator(journal, operator_id)
     item = journal.get_item(item_id)
@@ -428,11 +430,51 @@ def start_archive(
         raise ValueError(
             f"item {item_id} is {item['state']}, must be analyzed to archive"
         )
-    eta = now_utc() + ARCHIVE_DURATION
+
+    source_site_id = item.get("current_site_id")
+    if target_site_id is None:
+        target_site_id = source_site_id   # default: archive in place
+    else:
+        if not any(s["id"] == target_site_id for s in journal.list_sites()):
+            raise ValueError(f"no site with id {target_site_id}")
+
+    size_gb = float(item.get("size_gb", 0) or 0)
+    duration = ARCHIVE_DURATION
+    transmission_s = 0.0
+    if (
+        source_site_id is not None
+        and target_site_id is not None
+        and int(source_site_id) != int(target_site_id)
+    ):
+        # Transmission time scales with the slower of source/dest link bandwidth.
+        src_tier = network.get(
+            journal.get_site_network(source_site_id) or "business_fiber"
+        )
+        dst_tier = network.get(
+            journal.get_site_network(target_site_id) or "business_fiber"
+        )
+        if src_tier is not None and dst_tier is not None:
+            min_mbps = min(src_tier.bandwidth_mbps, dst_tier.bandwidth_mbps)
+            # Mbps × 0.000125 → GB/s; 80% protocol efficiency
+            gb_per_s = max(min_mbps * 0.000125 * 0.8, 1e-6)
+            transmission_s = size_gb / gb_per_s
+            duration = ARCHIVE_DURATION + timedelta(
+                seconds=transmission_s * _TS
+            )
+
+    eta = now_utc() + duration
     sid = schedule_fn(
-        eta, "archive_complete", {"item_id": item_id, "operator_id": op["id"]}
+        eta,
+        "archive_complete",
+        {
+            "item_id": item_id,
+            "operator_id": op["id"],
+            "target_site_id": target_site_id,
+        },
     )
     journal.set_item_state(item_id, "archiving", current_vm_id=None)
+    if target_site_id is not None and target_site_id != source_site_id:
+        journal.set_item_transit(item_id, int(target_site_id))
     journal.append(
         "archive_started",
         "INFO",
@@ -440,10 +482,21 @@ def start_archive(
             "scheduled_id": sid,
             "item_id": item_id,
             "operator_id": op["id"],
+            "source_site_id": source_site_id,
+            "target_site_id": target_site_id,
+            "size_gb": size_gb,
+            "transmission_s_unscaled": round(transmission_s, 2),
             "eta": eta.isoformat(),
         },
     )
-    return {"scheduled_id": sid, "eta": eta.isoformat(), "operator": op["name"]}
+    return {
+        "scheduled_id": sid,
+        "eta": eta.isoformat(),
+        "operator": op["name"],
+        "source_site_id": source_site_id,
+        "target_site_id": target_site_id,
+        "size_gb": size_gb,
+    }
 
 
 def start_wipe(
@@ -633,17 +686,24 @@ def on_analyze_complete(
 
 
 def on_archive_complete(
-    journal: Journal, item_id: int, operator_id: int | None = None
+    journal: Journal,
+    item_id: int,
+    operator_id: int | None = None,
+    target_site_id: int | None = None,
 ) -> dict:
     item = journal.get_item(item_id)
     if not item:
         return {"error": "item not found"}
 
-    # Pick archive destination: the item's current site if it has tape
-    # capacity, else the first site with free tape space, else fall back
-    # to the first tape drive's site (legacy path).
+    # Pick archive destination: explicit target > item's transit dest >
+    # item's current site > first site with free tape space.
     size_gb = float(item.get("size_gb", 0) or 0)
-    destination_site = item.get("current_site_id")
+    if target_site_id is not None:
+        destination_site = int(target_site_id)
+    elif item.get("transit_to_site_id") is not None:
+        destination_site = int(item["transit_to_site_id"])
+    else:
+        destination_site = item.get("current_site_id")
     if destination_site is not None:
         util = procurement.site_utilization(journal, destination_site)
         free = util["tape_cap_gb"] - util["tape_used_gb"]
@@ -684,6 +744,9 @@ def on_archive_complete(
         reward = int(reward * (1.0 + storage_bonus))
     new_balance = journal.adjust_funding(reward)
     journal.set_item_state(item_id, "archived", current_vm_id=None)
+    # Clear any transit marker left over from the archive request
+    if item.get("transit_to_site_id") is not None:
+        journal.set_item_transit(item_id, None)
     if destination_site is not None:
         journal.set_item_site(item_id, int(destination_site))
     else:
