@@ -1488,8 +1488,15 @@ class ScpTui(App):
         verbs: set[str] = {"quit", "exit", "help"}
         for topic in HELP_TOPICS.values():
             for cmd, _desc in topic["commands"]:
-                # First token of "scan" / "analyze <item> <vm>" / "playbook <site> <rule> on|off"
-                verbs.add(cmd.split()[0])
+                tokens = cmd.split()
+                if not tokens:
+                    continue   # blank divider row inside help
+                first = tokens[0]
+                # Skip documentation markers ("category:", "examples", "tip")
+                # — they are section labels, not invokable verbs.
+                if first.endswith(":") or first in {"examples", "tip"}:
+                    continue
+                verbs.add(first)
         verbs.update({"item", "vm", "host"})   # detail views not in help topics
         self._known_verbs = sorted(verbs)
         return self._known_verbs
