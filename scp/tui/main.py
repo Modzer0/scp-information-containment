@@ -1137,6 +1137,10 @@ class ScpTui(App):
             f"cognitohazard={p.get('cognitohazard_class', 0)}  "
             f"self_propagation={p.get('self_propagation', 0)}"
         )
+        size = it.get("size_gb", 0)
+        enc = it.get("encrypted_at_rest", False)
+        enc_tag = "[green]encrypted-at-rest[/]" if enc else "[red]UNENCRYPTED at rest[/]"
+        self._log(f"  payload: {size:.1f} GB  {enc_tag}")
         self._log(f"  created: {it.get('created_at')}")
         self._log(f"  updated: {it.get('updated_at')}")
         self._log(f"[bold]{'-' * 60}[/]")
@@ -1512,6 +1516,12 @@ class ScpTui(App):
                 f"  ride≈{ride_h:.0f}h"
                 if ride_h > 0 else ""
             )
+            stor_color = "red" if u.get("storage_over") else "green"
+            tape_color = "red" if u.get("tape_over") else "green"
+            stor_used = u.get("storage_used_gb", 0)
+            stor_cap = u.get("storage_cap_gb", 0)
+            tape_used = u.get("tape_used_gb", 0)
+            tape_cap = u.get("tape_cap_gb", 0)
             self._log(
                 f"  [cyan]site {u['site_id']}[/] hosts={u['hosts']}  "
                 f"power=[{pw_color}]{u['power_kw_used']:.2f}/"
@@ -1520,6 +1530,11 @@ class ScpTui(App):
                 f"{u['cooling_kw_capacity']}kW[/]  "
                 f"net=[dim]{net.get('tier', '?')}[/]  "
                 f"enc=[{enc_color}]{enc}[/]{ride_tag}{fuel_tag}"
+            )
+            self._log(
+                f"    storage=[{stor_color}]{stor_used:.0f}/{stor_cap:.0f}GB[/]  "
+                f"tape=[{tape_color}]{tape_used:.0f}/{tape_cap:.0f}GB[/]  "
+                f"RAM={u.get('ram_cap_gb', 0)}GB"
             )
 
         # Item buckets (only show non-empty)

@@ -257,6 +257,27 @@ CREATE TABLE IF NOT EXISTS outages (
 );
 CREATE INDEX IF NOT EXISTS idx_outages_active ON outages(site_id, status);
 
+CREATE TABLE IF NOT EXISTS storage_arrays (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id         INTEGER NOT NULL,
+    sku             TEXT NOT NULL,
+    capacity_gb     REAL NOT NULL,
+    array_type      TEXT NOT NULL,   -- ssd | hdd | hybrid
+    status          TEXT NOT NULL,   -- online | offline
+    installed_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_storage_arrays_site ON storage_arrays(site_id);
+
+CREATE TABLE IF NOT EXISTS tape_libraries (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id         INTEGER NOT NULL,
+    sku             TEXT NOT NULL,
+    capacity_gb     REAL NOT NULL,
+    status          TEXT NOT NULL,
+    installed_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tape_libraries_site ON tape_libraries(site_id);
+
 CREATE TABLE IF NOT EXISTS contracts (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
     contract_type          TEXT NOT NULL,
@@ -286,6 +307,8 @@ class Journal:
         # Forward-compat column adds — cheap on existing DBs, no-op after first run.
         self._ensure_column("items", "current_site_id", "INTEGER")
         self._ensure_column("items", "transit_to_site_id", "INTEGER")
+        self._ensure_column("items", "size_gb", "REAL DEFAULT 0")
+        self._ensure_column("items", "encrypted_at_rest", "INTEGER DEFAULT 0")
         self._ensure_column("hosts", "transit_to_site_id", "INTEGER")
         self._ensure_column("staff", "transit_to_site_id", "INTEGER")
 
@@ -496,7 +519,8 @@ class Journal:
 
     _ITEM_COLS = (
         "id, designation, item_class, hazard_strength, profile, state, "
-        "current_vm_id, created_at, updated_at, current_site_id, transit_to_site_id"
+        "current_vm_id, created_at, updated_at, current_site_id, transit_to_site_id, "
+        "size_gb, encrypted_at_rest"
     )
 
     def list_items(self, state: str | None = None) -> list[dict]:
@@ -532,6 +556,8 @@ class Journal:
             "updated_at": r[8],
             "current_site_id": r[9],
             "transit_to_site_id": r[10],
+            "size_gb": float(r[11] or 0),
+            "encrypted_at_rest": bool(r[12] or 0),
         }
 
     def set_item_state(
@@ -562,6 +588,18 @@ class Journal:
         self._conn.execute(
             "UPDATE items SET transit_to_site_id = ?, updated_at = ? WHERE id = ?",
             (to_site_id, iso(now_utc()), item_id),
+        )
+
+    def set_item_size(self, item_id: int, size_gb: float) -> None:
+        self._conn.execute(
+            "UPDATE items SET size_gb = ?, updated_at = ? WHERE id = ?",
+            (float(size_gb), iso(now_utc()), item_id),
+        )
+
+    def set_item_encryption(self, item_id: int, encrypted: bool) -> None:
+        self._conn.execute(
+            "UPDATE items SET encrypted_at_rest = ?, updated_at = ? WHERE id = ?",
+            (1 if encrypted else 0, iso(now_utc()), item_id),
         )
 
     # --- funding ------------------------------------------------------
@@ -1555,9 +1593,115 @@ class Journal:
             (iso(next_billing_utc), iso(now_utc()), contract_id),
         )
 
+    # --- storage arrays + tape libraries ------------------------------
+
+    def create_storage_array(
+        self, site_id: int, sku: str, capacity_gb: float, array_type: str
+    ) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO storage_arrays (site_id, sku, capacity_gb, array_type, "
+            "status, installed_at) VALUES (?, ?, ?, ?, 'online', ?)",
+            (site_id, sku, capacity_gb, array_type, iso(now_utc())),
+        )
+        return cur.lastrowid or 0
+
+    def list_storage_arrays(self, site_id: int | None = None) -> list[dict]:
+        if site_id is not None:
+            rows = self._conn.execute(
+                "SELECT id, site_id, sku, capacity_gb, array_type, status, "
+                "installed_at FROM storage_arrays WHERE site_id = ? ORDER BY id",
+                (site_id,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT id, site_id, sku, capacity_gb, array_type, status, "
+                "installed_at FROM storage_arrays ORDER BY id"
+            ).fetchall()
+        return [
+            {
+                "id": r[0], "site_id": r[1], "sku": r[2],
+                "capacity_gb": float(r[3]), "array_type": r[4],
+                "status": r[5], "installed_at": r[6],
+            } for r in rows
+        ]
+
+    def sum_site_storage_arrays_gb(self, site_id: int) -> float:
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(capacity_gb), 0) FROM storage_arrays "
+            "WHERE site_id = ? AND status = 'online'",
+            (site_id,),
+        ).fetchone()
+        return float(row[0]) if row else 0.0
+
+    def create_tape_library(
+        self, site_id: int, sku: str, capacity_gb: float
+    ) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO tape_libraries (site_id, sku, capacity_gb, status, "
+            "installed_at) VALUES (?, ?, ?, 'online', ?)",
+            (site_id, sku, capacity_gb, iso(now_utc())),
+        )
+        return cur.lastrowid or 0
+
+    def list_tape_libraries(self, site_id: int | None = None) -> list[dict]:
+        if site_id is not None:
+            rows = self._conn.execute(
+                "SELECT id, site_id, sku, capacity_gb, status, installed_at "
+                "FROM tape_libraries WHERE site_id = ? ORDER BY id",
+                (site_id,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT id, site_id, sku, capacity_gb, status, installed_at "
+                "FROM tape_libraries ORDER BY id"
+            ).fetchall()
+        return [
+            {
+                "id": r[0], "site_id": r[1], "sku": r[2],
+                "capacity_gb": float(r[3]), "status": r[4],
+                "installed_at": r[5],
+            } for r in rows
+        ]
+
+    def sum_site_tape_libraries_gb(self, site_id: int) -> float:
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(capacity_gb), 0) FROM tape_libraries "
+            "WHERE site_id = ? AND status = 'online'",
+            (site_id,),
+        ).fetchone()
+        return float(row[0]) if row else 0.0
+
+    def sum_site_storage_used_gb(self, site_id: int) -> float:
+        """Items currently held on working storage at this site
+        (quarantined / analyzing / analyzed / archiving states)."""
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(size_gb), 0) FROM items "
+            "WHERE current_site_id = ? AND state IN "
+            "('quarantined', 'analyzing', 'analyzed', 'archiving')",
+            (site_id,),
+        ).fetchone()
+        return float(row[0]) if row else 0.0
+
+    def sum_site_tape_used_gb(self, site_id: int) -> float:
+        """Items in archived state living at this site."""
+        row = self._conn.execute(
+            "SELECT COALESCE(SUM(size_gb), 0) FROM items "
+            "WHERE current_site_id = ? AND state = 'archived'",
+            (site_id,),
+        ).fetchone()
+        return float(row[0]) if row else 0.0
+
+    def update_host_specs(self, host_id: int, specs: dict) -> None:
+        self._conn.execute(
+            "UPDATE hosts SET specs = ? WHERE id = ?",
+            (json.dumps(specs), host_id),
+        )
+
     # --- reset (wipes all gameplay state; keeps schema) ---------------
 
     RESET_TABLES = (
+        "tape_libraries",
+        "storage_arrays",
         "outages",
         "site_resilience",
         "power_plants",

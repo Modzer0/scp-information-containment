@@ -15,6 +15,8 @@ ORBITAL_CATEGORIES = {"satellite"}
 SUBMARINE_CATEGORIES = {"submarine"}
 POWER_PLANT_CATEGORIES = {"power_plant"}
 RESILIENCE_CATEGORIES = {"battery_bank", "fuel_storage"}
+STORAGE_CATEGORIES = {"storage_array", "tape_library"}
+HOST_MODULE_CATEGORIES = {"host_module"}
 AIRFIELD_RANK = ["none", "dirt_strip", "small_airport", "private_airfield"]
 PORT_RANK = ["none", "small_port", "deepwater_port"]
 
@@ -72,6 +74,8 @@ def buy(
     is_orbital = sku.category in ORBITAL_CATEGORIES
     is_power_plant = sku.category in POWER_PLANT_CATEGORIES
     is_resilience = sku.category in RESILIENCE_CATEGORIES
+    is_storage = sku.category in STORAGE_CATEGORIES
+    is_host_module = sku.category in HOST_MODULE_CATEGORIES
     is_module = sku.category == "vm_module"
 
     if is_orbital:
@@ -110,7 +114,7 @@ def buy(
             )
         target_vm_id = None
     elif (is_host or is_site_module or is_aircraft or is_ship
-          or is_power_plant or is_resilience):
+          or is_power_plant or is_resilience or is_storage):
         if target_site_id is None:
             target_site_id = sites[0]["id"]
         if not any(s["id"] == target_site_id for s in sites):
@@ -163,6 +167,17 @@ def buy(
             target_vm_id = vms[0]["id"]
         if journal.get_vm(int(target_vm_id)) is None:
             raise ValueError(f"no vm {target_vm_id}")
+        target_site_id = None
+    elif is_host_module:
+        # Host upgrades target an existing host by id; we stash the id in
+        # target_vm_id so the existing purchase row can carry it.
+        if target_vm_id is None:
+            hosts = journal.list_hosts()
+            if not hosts:
+                raise ValueError("no hosts to upgrade")
+            target_vm_id = hosts[0]["id"]
+        if journal.get_host(int(target_vm_id)) is None:
+            raise ValueError(f"no host {target_vm_id}")
         target_site_id = None
     else:
         raise ValueError(f"sku category '{sku.category}' not buyable in this phase")
@@ -439,6 +454,47 @@ def on_install_complete(journal: Journal, purchase_id: int) -> dict:
         result.update(
             {"site_id": site_id, "added_hours": hrs, "total_hours": res["fuel_hours"]}
         )
+    elif sku.category == "storage_array":
+        site_id = p["target_site_id"]
+        cap_gb = float(sku.capabilities.get("capacity_gb", 0))
+        array_type = str(sku.capabilities.get("array_type", "ssd"))
+        array_id = journal.create_storage_array(
+            site_id=site_id, sku=sku.sku, capacity_gb=cap_gb, array_type=array_type,
+        )
+        result.update(
+            {"storage_array_id": array_id, "site_id": site_id,
+             "capacity_gb": cap_gb, "array_type": array_type}
+        )
+    elif sku.category == "tape_library":
+        site_id = p["target_site_id"]
+        cap_gb = float(sku.capabilities.get("capacity_gb", 0))
+        lib_id = journal.create_tape_library(
+            site_id=site_id, sku=sku.sku, capacity_gb=cap_gb,
+        )
+        result.update(
+            {"tape_library_id": lib_id, "site_id": site_id, "capacity_gb": cap_gb}
+        )
+    elif sku.category == "host_module":
+        # target_vm_id carries the host id for host_module purchases.
+        host_id = int(p["target_vm_id"])
+        host = journal.get_host(host_id)
+        if not host:
+            result["error"] = f"target host {host_id} no longer exists"
+        else:
+            spec_key = str(sku.capabilities.get("host_spec", ""))
+            add = int(sku.capabilities.get("add", 0))
+            specs = dict(host["specs"])
+            # Normalize to *_gb keys for RAM and storage_gb; older rows may
+            # have storage_tb — migrate in-place.
+            if spec_key == "storage_gb" and "storage_tb" in specs and "storage_gb" not in specs:
+                specs["storage_gb"] = int(specs.pop("storage_tb")) * 1_000
+            before = int(specs.get(spec_key, 0))
+            specs[spec_key] = before + add
+            journal.update_host_specs(host_id, specs)
+            result.update(
+                {"host_id": host_id, "spec": spec_key, "before": before,
+                 "after": specs[spec_key], "add": add}
+            )
     else:
         result["error"] = f"unsupported sku category {sku.category}"
 
@@ -495,6 +551,25 @@ def site_utilization(journal: Journal, site_id: int) -> dict:
             resilience["battery_kwh"] / power_kw_used
             + resilience["fuel_hours"]
         )
+
+    # Storage / tape accounting.
+    host_storage_gb = 0.0
+    for h in hosts:
+        specs = h.get("specs", {})
+        if "storage_gb" in specs:
+            host_storage_gb += float(specs["storage_gb"])
+        elif "storage_tb" in specs:
+            host_storage_gb += float(specs["storage_tb"]) * 1_000
+    array_storage_gb = journal.sum_site_storage_arrays_gb(site_id)
+    storage_cap_gb = host_storage_gb + array_storage_gb
+    storage_used_gb = journal.sum_site_storage_used_gb(site_id)
+
+    # RAM totals across hosts at this site (not yet enforced against items)
+    ram_cap_gb = sum(int(h.get("specs", {}).get("ram_gb", 0)) for h in hosts)
+
+    tape_cap_gb = journal.sum_site_tape_libraries_gb(site_id)
+    tape_used_gb = journal.sum_site_tape_used_gb(site_id)
+
     return {
         "site_id": site_id,
         "hosts": len(hosts),
@@ -513,4 +588,11 @@ def site_utilization(journal: Journal, site_id: int) -> dict:
         "cooling_kw_used": cooling_kw_used,
         "cooling_kw_capacity": capacity["cooling_kw"],
         "cooling_over": cooling_kw_used > capacity["cooling_kw"],
+        "ram_cap_gb": ram_cap_gb,
+        "storage_cap_gb": round(storage_cap_gb, 1),
+        "storage_used_gb": round(storage_used_gb, 1),
+        "storage_over": storage_used_gb > storage_cap_gb,
+        "tape_cap_gb": round(tape_cap_gb, 1),
+        "tape_used_gb": round(tape_used_gb, 1),
+        "tape_over": tape_used_gb > tape_cap_gb,
     }

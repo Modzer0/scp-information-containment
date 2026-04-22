@@ -106,7 +106,7 @@ def bootstrap_if_empty(journal: Journal) -> None:
         specs={
             "cpu": "16c",
             "ram_gb": 64,
-            "storage_tb": 2,
+            "storage_gb": 2_000,           # 2 TB onboard storage
             "power_w": 400,
             "heat_btu_hr": round(400 * 3.41),
         },
@@ -119,6 +119,9 @@ def bootstrap_if_empty(journal: Journal) -> None:
         status="idle",
     )
     journal.create_tape_drive(site_id=site_id, name="tape-01")
+    # Starter cold-archive: 500 TB LTO library so first archives succeed
+    journal.create_tape_library(site_id=site_id, sku="tape-lib-small",
+                                capacity_gb=500_000)
     # Initial site ships with enough battery + fuel to cover itself for the
     # starting workload. Expansions will require purchased additions.
     journal.add_site_battery(site_id, 10)        # ~25h @ 0.4 kW
@@ -195,7 +198,10 @@ def start_scan(journal: Journal, schedule_fn: Any, operator_id: int | None = Non
 
 
 def acquire_candidate(
-    journal: Journal, item_id: int, operator_id: int | None = None
+    journal: Journal,
+    item_id: int,
+    operator_id: int | None = None,
+    target_site_id: int | None = None,
 ) -> dict:
     op = _resolve_operator(journal, operator_id)
     item = journal.get_item(item_id)
@@ -203,12 +209,64 @@ def acquire_candidate(
         raise ValueError(f"no item {item_id}")
     if item["state"] != "candidate":
         raise ValueError(f"item {item_id} is {item['state']}, not candidate")
+
+    # Decide where to put the acquired payload. Default: first site.
+    sites = journal.list_sites()
+    if not sites:
+        raise ValueError("no sites available for quarantine")
+    if target_site_id is None:
+        target_site_id = sites[0]["id"]
+    elif not any(s["id"] == target_site_id for s in sites):
+        raise ValueError(f"no site with id {target_site_id}")
+
+    # Storage capacity check
+    size_gb = float(item.get("size_gb", 0) or 0)
+    util = procurement.site_utilization(journal, target_site_id)
+    free_gb = util["storage_cap_gb"] - util["storage_used_gb"]
+    if size_gb > free_gb:
+        raise ValueError(
+            f"insufficient quarantine storage at site {target_site_id}: "
+            f"need {size_gb:.1f} GB, free {free_gb:.1f} GB "
+            f"(cap {util['storage_cap_gb']:.1f} GB)"
+        )
+
+    # Auto-encrypt at rest if site has any encryption installed
+    site_enc = journal.get_site_encryption(target_site_id)
+    encrypted = site_enc != "none"
+
     journal.set_item_state(item_id, "quarantined", current_vm_id=None)
+    journal.set_item_site(item_id, target_site_id)
+    journal.set_item_encryption(item_id, encrypted)
     journal.grant_xp(op["id"], "infosec", 1)
     journal.append(
-        "item_acquired", "INFO", {"item_id": item_id, "operator_id": op["id"]}
+        "item_acquired",
+        "INFO",
+        {
+            "item_id": item_id,
+            "operator_id": op["id"],
+            "site_id": target_site_id,
+            "size_gb": size_gb,
+            "encrypted_at_rest": encrypted,
+        },
     )
-    return {"item_id": item_id, "state": "quarantined", "operator": op["name"]}
+    if not encrypted:
+        journal.append(
+            "unencrypted_at_rest",
+            "NOTICE",
+            {
+                "item_id": item_id,
+                "site_id": target_site_id,
+                "reason": "site encryption level is 'none'",
+            },
+        )
+    return {
+        "item_id": item_id,
+        "state": "quarantined",
+        "operator": op["name"],
+        "site_id": target_site_id,
+        "size_gb": size_gb,
+        "encrypted_at_rest": encrypted,
+    }
 
 
 def start_analyze(
@@ -580,6 +638,43 @@ def on_archive_complete(
     item = journal.get_item(item_id)
     if not item:
         return {"error": "item not found"}
+
+    # Pick archive destination: the item's current site if it has tape
+    # capacity, else the first site with free tape space, else fall back
+    # to the first tape drive's site (legacy path).
+    size_gb = float(item.get("size_gb", 0) or 0)
+    destination_site = item.get("current_site_id")
+    if destination_site is not None:
+        util = procurement.site_utilization(journal, destination_site)
+        free = util["tape_cap_gb"] - util["tape_used_gb"]
+        if size_gb > free:
+            # Try any other site with capacity
+            for s in journal.list_sites():
+                if s["id"] == destination_site:
+                    continue
+                u2 = procurement.site_utilization(journal, s["id"])
+                if (u2["tape_cap_gb"] - u2["tape_used_gb"]) >= size_gb:
+                    destination_site = s["id"]
+                    break
+            else:
+                # No site with capacity — promote to WARNING, leave item
+                # in analyzed state, item is not archived.
+                journal.append(
+                    "archive_overflow",
+                    "ALERT",
+                    {
+                        "item_id": item_id,
+                        "size_gb": size_gb,
+                        "reason": "no site has sufficient tape capacity",
+                    },
+                )
+                journal.set_item_state(item_id, "analyzed", current_vm_id=None)
+                return {
+                    "error": "no tape capacity available",
+                    "item_id": item_id,
+                    "size_gb": size_gb,
+                }
+
     reward = ARCHIVE_REWARD.get(item["class"], 0)
     # Storage satellites: Foundation pays a premium (+25% per orbital storage sat,
     # capped at +100%) for items archived against an on-orbit backup.
@@ -589,10 +684,10 @@ def on_archive_complete(
         reward = int(reward * (1.0 + storage_bonus))
     new_balance = journal.adjust_funding(reward)
     journal.set_item_state(item_id, "archived", current_vm_id=None)
-    # If the item doesn't yet have a home site (legacy rows, or items that
-    # were analyzed before Phase 3b added current_site_id tracking), park it
-    # at the first tape drive's site as the default archive.
-    if item.get("current_site_id") is None:
+    if destination_site is not None:
+        journal.set_item_site(item_id, int(destination_site))
+    else:
+        # Legacy fallback: no site tracked at all — park at first tape drive
         drives = journal.list_tape_drives()
         if drives:
             journal.set_item_site(item_id, int(drives[0]["site_id"]))

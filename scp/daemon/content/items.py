@@ -58,6 +58,13 @@ CLASS_HAZARD = {
     "Euclid": (5, 12),
     "Keter": (12, 22),
 }
+# Payload sizes in GB: Safe items are small text/audio; Euclid are captured
+# media/packet dumps; Keter can be full drive images + continuous feeds.
+CLASS_SIZE_GB = {
+    "Safe": (1, 20),
+    "Euclid": (20, 500),
+    "Keter": (500, 5000),
+}
 
 
 @dataclass
@@ -70,6 +77,7 @@ class ItemProfile:
     self_propagation: int
     form: str
     effect: str
+    size_gb: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -93,6 +101,7 @@ def generate(rng: random.Random | None = None) -> ItemProfile:
     r = rng or random.Random()
     c = _weighted_class(r)
     lo, hi = CLASS_HAZARD[c]
+    slo, shi = CLASS_SIZE_GB[c]
     return ItemProfile(
         designation=f"SCP-{r.randint(1000, 9999)}",
         item_class=c,
@@ -106,4 +115,5 @@ def generate(rng: random.Random | None = None) -> ItemProfile:
         ),
         form=f"{r.choice(ADJECTIVES)} {r.choice(FORMS)}",
         effect=r.choice(EFFECTS),
+        size_gb=round(r.uniform(slo, shi), 2),
     )

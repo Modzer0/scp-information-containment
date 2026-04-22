@@ -121,7 +121,16 @@ Type `quit` to exit the TUI (daemon keeps running).
 - Auto-generated incident reports with root cause, contributing factors, recommendations
 - Brownout mid-analysis: overloaded sites roll leak-tier promotion
 
-**Infrastructure (68 SKUs, 14 categories)**
+**Storage + item size model**
+- Items have `size_gb` assigned at generation: Safe 1–20 GB, Euclid 20–500 GB, Keter 500–5,000 GB
+- Acquire refused when site quarantine storage is full
+- Archive refused / re-routes to an alternate site if local tape is full
+- Items auto-encrypted at rest when site has any link-encryption installed (software+); otherwise `unencrypted_at_rest` event fires
+- Buy `storage_array` SKUs (48 TB SSD → 5 PB hybrid) to expand working storage
+- Buy `tape_library` SKUs (500 TB LTO → 50 PB vault) to expand cold archive
+- Buy `host_module` SKUs (RAM +64/+512 GB, storage +4/+48 TB) to upgrade individual hosts in place
+
+**Infrastructure (80+ SKUs, 17 categories)**
 - Compute: servers, AI pods (Invidia DGZ), mainframes (Ibex Z-class LPARs)
 - Encryption: software VPN → hardware → Type-1 (gates commercial-link work)
 - Networking: dial-up → dark fiber → Starstream → GEO sat → owned `private_sat`

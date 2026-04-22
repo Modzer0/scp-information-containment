@@ -297,6 +297,85 @@ _add(Sku(
     description="Buried reserve sufficient for month-long supply disruptions.",
 ))
 
+# --- Storage arrays (hot working storage for quarantined items) ------
+
+_add(Sku(
+    "storage-array-48tb-ssd", "48 TB SSD array", "storage_array",
+    price_usd=15_000, power_w=300, form_factor="rack_u:2",
+    lead_time_s=_d(86_400 * 5),
+    capabilities={"capacity_gb": 48_000, "array_type": "ssd"},
+    description="All-flash quarantine storage. Low latency for active analysis.",
+))
+_add(Sku(
+    "storage-array-500tb-hdd", "500 TB HDD array", "storage_array",
+    price_usd=120_000, power_w=2_000, form_factor="rack_u:12",
+    lead_time_s=_d(86_400 * 14),
+    capabilities={"capacity_gb": 500_000, "array_type": "hdd"},
+    description="Bulk spinning-disk array. Large quarantine pool.",
+))
+_add(Sku(
+    "storage-array-5pb-hybrid", "5 PB hybrid array", "storage_array",
+    price_usd=900_000, power_w=8_000, form_factor="rack_u:48",
+    lead_time_s=_d(86_400 * 45),
+    capabilities={"capacity_gb": 5_000_000, "array_type": "hybrid"},
+    description="SSD cache + HDD bulk. Enterprise-tier working storage.",
+))
+
+# --- Tape libraries (cold archive for archived items) ----------------
+
+_add(Sku(
+    "tape-lib-small", "Small tape library (500 TB LTO)", "tape_library",
+    price_usd=25_000, power_w=400, form_factor="rack_u:8",
+    lead_time_s=_d(86_400 * 10),
+    capabilities={"capacity_gb": 500_000},
+    description="Automated LTO library. Basic cold-archive capacity.",
+))
+_add(Sku(
+    "tape-lib-med", "Mid tape library (5 PB)", "tape_library",
+    price_usd=200_000, power_w=2_500, form_factor="rack_u:20",
+    lead_time_s=_d(86_400 * 30),
+    capabilities={"capacity_gb": 5_000_000},
+    description="Multi-drawer tape library. Scales to petabytes.",
+))
+_add(Sku(
+    "tape-lib-vault", "Archive vault (50 PB)", "tape_library",
+    price_usd=1_800_000, power_w=15_000, form_factor="facility",
+    lead_time_s=_d(86_400 * 180),
+    capabilities={"capacity_gb": 50_000_000},
+    description="Foundation-tier deep archive. Requires dedicated room.",
+))
+
+# --- Host modules (in-place RAM / storage upgrades per host) ---------
+
+_add(Sku(
+    "host-ram-64gb", "Host RAM upgrade (+64 GB DDR5)", "host_module",
+    price_usd=2_000, power_w=10, form_factor="dimm",
+    lead_time_s=_d(3600),
+    capabilities={"host_spec": "ram_gb", "add": 64},
+    description="DIMM kit. +64 GB RAM to target host.",
+))
+_add(Sku(
+    "host-ram-512gb", "Host RAM upgrade (+512 GB DDR5)", "host_module",
+    price_usd=15_000, power_w=60, form_factor="dimm",
+    lead_time_s=_d(86_400 * 2),
+    capabilities={"host_spec": "ram_gb", "add": 512},
+    description="Full-channel memory expansion.",
+))
+_add(Sku(
+    "host-storage-nvme-4tb", "NVMe storage (+4 TB)", "host_module",
+    price_usd=1_500, power_w=15, form_factor="u.2",
+    lead_time_s=_d(3600),
+    capabilities={"host_spec": "storage_gb", "add": 4_000},
+    description="PCIe NVMe drive.",
+))
+_add(Sku(
+    "host-storage-hdd-48tb", "HDD storage (+48 TB)", "host_module",
+    price_usd=18_000, power_w=80, form_factor="3.5in-bank",
+    lead_time_s=_d(86_400 * 5),
+    capabilities={"host_spec": "storage_gb", "add": 48_000},
+    description="Bulk spinning-disk bank.",
+))
+
 # --- VM upgrade modules (apply to a specific VM) ----------------------
 
 _add(Sku(
