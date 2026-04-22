@@ -5,8 +5,8 @@ import random
 from pathlib import Path
 
 from . import (
-    contracts, gameplay, network, outages, payroll, playbooks, procurement,
-    recruitment, sites, training, transport,
+    agents, contracts, gameplay, network, outages, payroll, playbooks,
+    procurement, recruitment, sites, training, transport,
 )
 from .clock import from_iso, iso, now_utc
 from .hardware import catalog as hw_catalog
@@ -195,6 +195,11 @@ class Daemon:
                     f"{result.get('name')} joins as {result.get('role_id')} "
                     f"@ ${result.get('annual_salary', 0):,}/yr"
                 )
+
+            elif kind == "staff_agent_tick":
+                result = agents.on_tick(self.journal, self.scheduler.add)
+                n = result.get("count", 0)
+                message = f"agents: {n} action(s) taken" if n else ""
 
             elif kind == "payroll_run":
                 result = payroll.on_payroll_run(self.journal, self.scheduler.add)
@@ -715,6 +720,26 @@ class Daemon:
                 },
             }
 
+        if mtype == "set_autonomy":
+            self.journal.set_staff_autonomy(
+                staff_id=int(payload["staff_id"]),
+                mode=str(payload["mode"]),
+            )
+            return {
+                "type": "ack",
+                "payload": {
+                    "staff_id": int(payload["staff_id"]),
+                    "mode": payload["mode"],
+                },
+            }
+
+        if mtype == "run_agent_tick":
+            # Manual kick (useful for testing); doesn't skip the scheduled one.
+            return {
+                "type": "ack",
+                "payload": agents.on_tick(self.journal, self.scheduler.add),
+            }
+
         if mtype == "roles":
             return {
                 "type": "roles",
@@ -794,6 +819,8 @@ class Daemon:
             outages.schedule_next_roll(self.scheduler.add)
         if "payroll_run" not in pending_kinds:
             payroll.schedule_next_payroll(self.scheduler.add)
+        if "staff_agent_tick" not in pending_kinds:
+            agents.schedule_next_tick(self.scheduler.add)
         print(
             f"SCP daemon listening on {self.ipc.host}:{self.ipc.port}, "
             f"db {self.journal.db_path}"

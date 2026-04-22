@@ -322,6 +322,7 @@ class Journal:
         self._ensure_column("items", "encrypted_at_rest", "INTEGER DEFAULT 0")
         self._ensure_column("hosts", "transit_to_site_id", "INTEGER")
         self._ensure_column("staff", "transit_to_site_id", "INTEGER")
+        self._ensure_column("staff", "autonomy", "TEXT DEFAULT 'off'")
 
     def _ensure_column(self, table: str, column: str, sqltype: str) -> None:
         rows = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -667,7 +668,7 @@ class Journal:
 
     _STAFF_COLS = (
         "id, name, role, is_player, skills, clearance, status, "
-        "assigned_site_id, salary, hired_at, transit_to_site_id"
+        "assigned_site_id, salary, hired_at, transit_to_site_id, autonomy"
     )
 
     def list_staff(self) -> list[dict]:
@@ -703,7 +704,15 @@ class Journal:
             "salary": r[8],
             "hired_at": r[9],
             "transit_to_site_id": r[10],
+            "autonomy": r[11] or "off",
         }
+
+    def set_staff_autonomy(self, staff_id: int, mode: str) -> None:
+        if mode not in ("off", "on"):
+            raise ValueError(f"unknown autonomy mode: {mode}")
+        self._conn.execute(
+            "UPDATE staff SET autonomy = ? WHERE id = ?", (mode, staff_id)
+        )
 
     def set_staff_assignment(self, staff_id: int, site_id: int) -> None:
         self._conn.execute(

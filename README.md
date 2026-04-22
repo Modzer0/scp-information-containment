@@ -171,6 +171,7 @@ Type `quit` to exit the TUI (daemon keeps running).
 - Training: 6 courses with real-clock durations + prereq chains
 - **Recruitment**: 10 hireable roles (analyst → senior memeticist → reactor operator → fixed/rotary pilot → scientist) with sourcing lead times (weeks to months) and annual salaries
 - **Weekly payroll**: scheduled `payroll_run` deducts weekly share of every NPC's annual wage from funding; shortfall → ALERT with balance going negative
+- **Staff autonomy agents** — flip any staff member with `autonomy <id> on`; every 2 min a `staff_agent_tick` runs each autonomous staff through a priority pipeline (wipe infected host → archive analyzed → analyze quarantined → acquire candidate → scan if queue empty), gated by clearance + infosec skill per item class. L1 staff auto-refuses Keter; L3 staff with 60+ infosec handle it safely.
 - Contracts: recurring billing for scanner feeds, diesel, Jet-A, bunker fuel
 - Playbooks: per-site auto-rules so the sim keeps working while you sleep
 

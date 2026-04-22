@@ -79,9 +79,10 @@ HELP_TOPICS = {
         ],
     },
     "staff": {
-        "title": "Staff + training + recruitment",
+        "title": "Staff + training + recruitment + autonomy",
         "commands": [
-            ("staff", "List roster with skills + clearance"),
+            ("staff", "List roster with skills, clearance, autonomy flag"),
+            ("autonomy <staff> on|off", "Flip a staff member between manual and autonomous operation"),
             ("roles", "List hireable roles (cost, salary, lead time)"),
             ("recruit <role> [site]", "Post a requisition; hire lands at ETA"),
             ("courses", "Training courses with prereqs"),
@@ -613,11 +614,31 @@ class ScpTui(App):
             for s in roster:
                 is_player = "[bold green](you)[/]" if s["is_player"] else ""
                 sk = " ".join(f"{k}={v}" for k, v in s["skills"].items())
+                auto = s.get("autonomy", "off")
+                auto_tag = (
+                    "[bold magenta]AUTO[/]" if auto == "on" else "[dim]manual[/]"
+                )
                 self._log(
                     f"[cyan]staff {s['id']}[/] {s['name']} "
-                    f"role={s['role']} clearance=L{s['clearance']} "
-                    f"status={s['status']} {is_player} [{sk}]"
+                    f"role={s['role']} L{s['clearance']} "
+                    f"[{s['status']}] {auto_tag} {is_player} [{sk}]"
                 )
+            return
+
+        if verb == "autonomy":
+            if len(parts) < 3 or parts[2].lower() not in ("on", "off"):
+                self._log("[yellow]usage: autonomy <staff_id> on|off[/]")
+                return
+            reply = await self.client.send(
+                {
+                    "type": "set_autonomy",
+                    "payload": {
+                        "staff_id": int(parts[1]),
+                        "mode": parts[2].lower(),
+                    },
+                }
+            )
+            self._log_reply("autonomy", reply)
             return
 
         if verb == "acquire":
@@ -1441,6 +1462,20 @@ class ScpTui(App):
                 f"{payload.get('candidate_name')} ({payload.get('role_id')}) "
                 f"-${payload.get('recruit_cost', 0):,}"
             )
+        if kind == "agent_action":
+            name = payload.get("staff_name", "?")
+            act = payload.get("action", "?")
+            target_bits = []
+            if payload.get("item_id") is not None:
+                target_bits.append(f"item {payload['item_id']}")
+            if payload.get("vm_id") is not None:
+                target_bits.append(f"vm {payload['vm_id']}")
+            if payload.get("host_id") is not None:
+                target_bits.append(f"host {payload['host_id']}")
+            tail = f" {' '.join(target_bits)}" if target_bits else ""
+            return f"{name} → {act}{tail}"
+        if kind == "staff_agent_tick":
+            return ""
         # Journal-side events
         if kind == "scan_started":
             return ""
