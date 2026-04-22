@@ -564,6 +564,52 @@ needs a `spent_fuel` table, a `waste_storage` SKU category, and
 
 ## 14. Maritime fleet
 
+### 14.0 Vessel equipment + orders
+
+Ships and submarines are not passive cargo haulers — each hull carries
+modular equipment and can be dispatched on revenue-generating orders
+that also produce intel and presence.
+
+**Equipment categories** (installed via `install_equipment`):
+
+- **Sensor** — towed/active sonar, maritime radar, ESM/ELINT suite,
+  anomalous-acoustic hydrophone. Each contributes a numeric rating that
+  boosts patrol/shadow payouts and (future) detection rolls. Ships-only
+  for radar; subs-only for certain fits.
+- **Stealth** — anechoic coating (subs only). Reduces detection chance
+  in fog-of-war (consumed by planned §24.5 combat layer).
+- **Comm** — encrypted satcom relay, VLF reception mast. Enables relay
+  between friendly assets; VLF lets subs receive at depth.
+- **Containment** — modular archive pods (50 TB / 500 TB). Enable the
+  `standby_archive` order. 500 TB fits only heavy hulls (heavy surface,
+  SSN/SSBN).
+- **Science** — oceanographic suite. Cover-identity loadout.
+
+Equipment can only be installed or removed while the vessel is berthed.
+Each SKU has a `fits_vessel_types` and optional `fits_classes` gate.
+
+**Orders** (issued via `order <ship|sub> <id> <kind>`):
+
+- `patrol [hours]` — ISR sweep. Requires ≥1 sensor. Payout =
+  `$5k/h × hull_mult × (1 + sensor_rating/10)`. Future: yields intel
+  tokens that feed the rival-GOI fog-of-war.
+- `escort_convoy [hours]` — protect trade lanes. Flat $40k × hull_mult.
+  Future: reduces `transfer_item` loss-in-transit risk on the same route.
+- `standby_archive [hours]` — act as a floating secure-archive-on-station.
+  Requires ≥1 containment pod. Payout = `$1k/h × (pod_capacity_tb / 10)`,
+  reflecting an O5 commission for offshore tape custody.
+- `return_to_port <site> [hours]` — transit the vessel to a new base
+  site. No payout; pure logistics move.
+
+While on order, vessel status flips to `at_sea` (surface) or `submerged`
+(sub). Completion fires a scheduler event that credits the payout,
+berths the vessel, and applies any effect (e.g., new site for
+`return_to_port`).
+
+Hull-class multipliers drive the economy: medium surface = 1.5×,
+heavy = 2.5×, UUV = 0.3×, SSN = 3×, SSBN = 5×. This is the lever for
+tuning vessel capex vs expected lifetime payout.
+
 ### 14.1 Surface vessels
 
 | Class | Real analog | Price | Bunks | Satcom | Notes |

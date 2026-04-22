@@ -38,6 +38,13 @@ HELP_TOPICS = {
             ("aircraft", "List owned aircraft"),
             ("ships", "List owned surface ships"),
             ("submarines", "List owned submarines"),
+            ("vessel <ship|sub> <id>", "Full dashboard for one vessel (equipment, rating, current order)"),
+            ("vessel_equipment [ship|submarine] [class]", "Browse installable equipment catalog"),
+            ("install_equipment <ship|sub> <id> <sku>", "Install equipment on a vessel (vessel must be berthed)"),
+            ("uninstall_equipment <equipment_id>", "Remove installed equipment (vessel must be berthed)"),
+            ("order <ship|sub> <id> <kind> [hours] [site]", "Issue an order: patrol | escort_convoy | standby_archive | return_to_port"),
+            ("cancel_order <ship|sub> <id>", "Cancel active order (no payout)"),
+            ("orders", "List recent vessel orders"),
             ("transport_methods", "Show truck / air / rail / sea / data_link methods"),
             ("transfer_item <ids|all> <site> [method]", "Ship archived items between sites.  data_link = encrypted network transmission"),
             ("relocate_host <host> <site> [method]", "Move compute between sites"),
@@ -955,11 +962,19 @@ class ScpTui(App):
             ss = reply.get("payload", {}).get("ships", [])
             if not ss:
                 self._log("[dim]no ships on roster[/]")
+            orders_reply = await self.client.send(
+                {"type": "vessel_orders", "payload": {"vessel_type": "ship", "state": "active"}}
+            )
+            active = {o["vessel_id"]: o for o in orders_reply.get("payload", {}).get("orders", [])}
             for s in ss:
+                tag = ""
+                if s["id"] in active:
+                    o = active[s["id"]]
+                    tag = f"  [magenta]→{o['kind']}[/] ETA {o['eta_utc'][:16]}"
                 self._log(
-                    f"[cyan]{s['hull_number']}[/] {s['sku']:20s} "
-                    f"class={s['class']}  @site {s['site_id']}  "
-                    f"status=[bold]{s['status']}[/]"
+                    f"[cyan]{s['id']:>3}[/] {s['hull_number']:8s} {s['sku']:22s} "
+                    f"class={s['class']:6s} @site {s['site_id']} "
+                    f"[bold]{s['status']}[/]{tag}"
                 )
             return
 
@@ -1113,12 +1128,207 @@ class ScpTui(App):
             subs = reply.get("payload", {}).get("submarines", [])
             if not subs:
                 self._log("[dim]no submarines on roster[/]")
+            # Annotate with active order if any
+            orders_reply = await self.client.send(
+                {"type": "vessel_orders", "payload": {"vessel_type": "submarine", "state": "active"}}
+            )
+            active = {o["vessel_id"]: o for o in orders_reply.get("payload", {}).get("orders", [])}
             for s in subs:
+                tag = ""
+                if s["id"] in active:
+                    o = active[s["id"]]
+                    tag = f"  [magenta]→{o['kind']}[/] ETA {o['eta_utc'][:16]}"
                 self._log(
-                    f"[cyan]{s['hull_number']}[/] {s['sku']:22s} "
+                    f"[cyan]{s['id']:>3}[/] {s['hull_number']:8s} {s['sku']:22s} "
                     f"class={s['class']:6s} @site {s['site_id']} "
-                    f"[bold]{s['status']}[/]"
+                    f"[bold]{s['status']}[/]{tag}"
                 )
+            return
+
+        if verb == "vessel_equipment":
+            vt = parts[1] if len(parts) > 1 else None
+            vc = parts[2] if len(parts) > 2 else None
+            reply = await self.client.send(
+                {"type": "vessel_equipment_catalog",
+                 "payload": {"vessel_type": vt, "vessel_class": vc}}
+            )
+            rows = reply.get("payload", {}).get("equipment", [])
+            if not rows:
+                self._log("[dim]no equipment matches filter[/]")
+                return
+            self._log(f"[bold]-- Equipment catalog ({len(rows)}) --[/]")
+            for e in rows:
+                fits_v = "/".join(e["fits_vessel_types"])
+                fits_c = ("/".join(e["fits_classes"])) if e["fits_classes"] else "any"
+                self._log(
+                    f"  [cyan]{e['sku']:24s}[/] [{e['category']:11s}] "
+                    f"r{e['rating']}  ${e['price_usd']:>10,}  "
+                    f"{fits_v:<18s} classes={fits_c}"
+                )
+                self._log(f"    [dim]{e['description']}[/]")
+            return
+
+        if verb == "install_equipment":
+            if len(parts) < 4:
+                self._log("[yellow]usage: install_equipment <ship|sub> <id> <sku>[/]")
+                return
+            vt_word = parts[1].lower()
+            vt = "submarine" if vt_word in ("sub", "submarine") else "ship"
+            try:
+                vid = int(parts[2])
+            except ValueError:
+                self._log("[red]vessel id must be an integer[/]")
+                return
+            sku = parts[3]
+            reply = await self.client.send({
+                "type": "install_vessel_equipment",
+                "payload": {"vessel_type": vt, "vessel_id": vid, "sku": sku},
+            })
+            if reply.get("type") == "error":
+                self._log(f"[red]{reply['payload'].get('error')}[/]")
+                return
+            p = reply.get("payload", {})
+            self._log(
+                f"[green]✓ installed[/] {sku} on {vt} {vid}  "
+                f"-${p.get('price_usd', 0):,}  balance=${p.get('balance', 0):,}"
+            )
+            return
+
+        if verb == "uninstall_equipment":
+            if len(parts) < 2:
+                self._log("[yellow]usage: uninstall_equipment <equipment_id>[/]")
+                return
+            try:
+                eid = int(parts[1])
+            except ValueError:
+                self._log("[red]equipment id must be an integer[/]")
+                return
+            reply = await self.client.send({
+                "type": "uninstall_vessel_equipment",
+                "payload": {"equipment_id": eid},
+            })
+            if reply.get("type") == "error":
+                self._log(f"[red]{reply['payload'].get('error')}[/]")
+                return
+            p = reply.get("payload", {})
+            self._log(
+                f"[green]✓ removed[/] {p.get('sku')} from {p.get('vessel_type')} "
+                f"{p.get('vessel_id')}"
+            )
+            return
+
+        if verb == "order":
+            if len(parts) < 4:
+                self._log(
+                    "[yellow]usage: order <ship|sub> <id> <kind> [hours] [site_id][/]\n"
+                    "[dim]  kinds: patrol (needs sensor) | escort_convoy | "
+                    "standby_archive (needs pod) | return_to_port (needs site)[/]"
+                )
+                return
+            vt_word = parts[1].lower()
+            vt = "submarine" if vt_word in ("sub", "submarine") else "ship"
+            try:
+                vid = int(parts[2])
+            except ValueError:
+                self._log("[red]vessel id must be an integer[/]")
+                return
+            kind = parts[3]
+            hours = None
+            target_site = None
+            if kind == "return_to_port":
+                if len(parts) < 5:
+                    self._log("[red]return_to_port requires a target site_id[/]")
+                    return
+                try:
+                    target_site = int(parts[4])
+                    if len(parts) > 5:
+                        hours = float(parts[5])
+                except ValueError:
+                    self._log("[red]site_id must be an integer[/]")
+                    return
+            else:
+                if len(parts) > 4:
+                    try:
+                        hours = float(parts[4])
+                    except ValueError:
+                        self._log("[red]hours must be numeric[/]")
+                        return
+            reply = await self.client.send({
+                "type": "vessel_order",
+                "payload": {
+                    "vessel_type": vt, "vessel_id": vid, "kind": kind,
+                    "hours": hours, "target_site_id": target_site,
+                },
+            })
+            if reply.get("type") == "error":
+                self._log(f"[red]{reply['payload'].get('error')}[/]")
+                return
+            p = reply.get("payload", {})
+            self._log(
+                f"[green]✓ order #{p.get('order_id')}[/] {vt} {vid} on {kind}  "
+                f"payout=${p.get('payout_usd', 0):,}  ETA {p.get('eta', '?')[:16]}"
+            )
+            return
+
+        if verb == "cancel_order":
+            if len(parts) < 3:
+                self._log("[yellow]usage: cancel_order <ship|sub> <id>[/]")
+                return
+            vt_word = parts[1].lower()
+            vt = "submarine" if vt_word in ("sub", "submarine") else "ship"
+            try:
+                vid = int(parts[2])
+            except ValueError:
+                self._log("[red]vessel id must be an integer[/]")
+                return
+            reply = await self.client.send({
+                "type": "cancel_vessel_order",
+                "payload": {"vessel_type": vt, "vessel_id": vid},
+            })
+            if reply.get("type") == "error":
+                self._log(f"[red]{reply['payload'].get('error')}[/]")
+                return
+            p = reply.get("payload", {})
+            self._log(f"[yellow]✕ cancelled order #{p.get('order_id')} ({p.get('kind')})[/]")
+            return
+
+        if verb == "orders":
+            reply = await self.client.send({"type": "vessel_orders", "payload": {}})
+            rows = reply.get("payload", {}).get("orders", [])
+            if not rows:
+                self._log("[dim]no vessel orders on record[/]")
+                return
+            for o in rows[:30]:
+                color = {
+                    "active": "cyan", "complete": "green", "cancelled": "yellow"
+                }.get(o["state"], "white")
+                self._log(
+                    f"[{color}]#{o['id']:>3}[/] {o['vessel_type']:9s} "
+                    f"{o['vessel_id']:>3}  {o['kind']:16s} "
+                    f"[{o['state']:9s}] payout=${o['payout_usd']:>8,} "
+                    f"ETA {o['eta_utc'][:16]}"
+                )
+            return
+
+        if verb == "vessel":
+            if len(parts) < 3:
+                self._log("[yellow]usage: vessel <ship|sub> <id>[/]")
+                return
+            vt_word = parts[1].lower()
+            vt = "submarine" if vt_word in ("sub", "submarine") else "ship"
+            try:
+                vid = int(parts[2])
+            except ValueError:
+                self._log("[red]vessel id must be an integer[/]")
+                return
+            reply = await self.client.send({
+                "type": "vessel_detail",
+                "payload": {"vessel_type": vt, "vessel_id": vid},
+            })
+            if reply.get("type") == "error":
+                self._log(f"[red]{reply['payload'].get('error')}[/]")
+                return
+            self._render_vessel_detail(reply.get("payload", {}))
             return
 
         if verb == "transport_methods":
@@ -1787,6 +1997,61 @@ class ScpTui(App):
             bar = "█" * val + "·" * max(0, 10 - val)
             self._log(f"    {k:22s} {val:>2}  [dim]{bar}[/]")
         self._log(f"[bold]{'-' * 60}[/]")
+
+    def _render_vessel_detail(self, d: dict) -> None:
+        """Full dashboard for one ship or submarine."""
+        v = d.get("vessel") or {}
+        vt = d.get("vessel_type", "vessel")
+        self._log(f"[bold]{'=' * 62}[/]")
+        label = "SHIP" if vt == "ship" else "SUBMARINE"
+        self._log(
+            f"[bold cyan]{label} {v.get('id')}[/]  {v.get('hull_number')}  "
+            f"[dim]sku={v.get('sku')} class={v.get('class')} "
+            f"@site {v.get('site_id')} [{v.get('status')}][/]"
+        )
+        # Ratings
+        self._log(
+            f"  sensor_rating={d.get('sensor_rating', 0)}  "
+            f"stealth_rating={d.get('stealth_rating', 0)}  "
+            f"archive_cap={d.get('archive_cap_gb', 0):,} GB"
+        )
+
+        # Active order
+        active = d.get("active_order")
+        if active:
+            self._log(
+                f"[bold]-- active order --[/]\n"
+                f"  #{active['id']} {active['kind']:16s} "
+                f"payout=${active['payout_usd']:,}  ETA {active['eta_utc'][:16]}"
+            )
+        else:
+            self._log("[dim]  no active order[/]")
+
+        # Equipment
+        equip = d.get("equipment", [])
+        if equip:
+            self._log(f"[bold]-- equipment ({len(equip)}) --[/]")
+            for e in equip:
+                self._log(
+                    f"  #{e['id']:>3} [{e['category']:11s}] "
+                    f"[cyan]{e['sku']:24s}[/] r{e['rating']}  {e['name']}"
+                )
+        else:
+            self._log("[dim]  no equipment installed[/]")
+
+        # Recent orders
+        recent = d.get("recent_orders", [])
+        if recent:
+            self._log(f"[bold]-- recent orders ({len(recent)}) --[/]")
+            for o in recent:
+                color = {
+                    "active": "cyan", "complete": "green", "cancelled": "yellow"
+                }.get(o["state"], "white")
+                self._log(
+                    f"  [{color}]#{o['id']:>3}[/] {o['kind']:16s} "
+                    f"[{o['state']:9s}] payout=${o['payout_usd']:,}"
+                )
+        self._log(f"[bold]{'=' * 62}[/]")
 
     def _render_site_detail(self, d: dict) -> None:
         """Full dashboard for one site — everything in one place."""

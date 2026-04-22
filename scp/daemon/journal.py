@@ -314,6 +314,34 @@ CREATE TABLE IF NOT EXISTS contracts (
     last_billed_utc        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_contracts_status ON contracts(status);
+
+CREATE TABLE IF NOT EXISTS vessel_equipment (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    vessel_type   TEXT NOT NULL,       -- 'ship' | 'submarine'
+    vessel_id     INTEGER NOT NULL,
+    sku           TEXT NOT NULL,
+    installed_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_vessel_equipment_vessel
+    ON vessel_equipment(vessel_type, vessel_id);
+
+CREATE TABLE IF NOT EXISTS vessel_orders (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    vessel_type   TEXT NOT NULL,
+    vessel_id     INTEGER NOT NULL,
+    kind          TEXT NOT NULL,
+    params_json   TEXT NOT NULL,
+    state         TEXT NOT NULL,       -- 'active' | 'complete' | 'cancelled'
+    started_at    TEXT NOT NULL,
+    eta_utc       TEXT NOT NULL,
+    payout_usd    INTEGER NOT NULL DEFAULT 0,
+    scheduled_id  INTEGER,
+    effect_json   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_vessel_orders_state
+    ON vessel_orders(state);
+CREATE INDEX IF NOT EXISTS idx_vessel_orders_vessel
+    ON vessel_orders(vessel_type, vessel_id, state);
 """
 
 
@@ -1388,6 +1416,202 @@ class Journal:
     def count_submarines(self) -> int:
         row = self._conn.execute("SELECT COUNT(*) FROM submarines").fetchone()
         return int(row[0]) if row else 0
+
+    # --- vessel status/site updates (ships + subs share the API) -----
+
+    def _vessel_table(self, vessel_type: str) -> str:
+        if vessel_type == "ship":
+            return "ships"
+        if vessel_type == "submarine":
+            return "submarines"
+        raise ValueError(f"bad vessel_type '{vessel_type}'")
+
+    def set_vessel_status(self, vessel_type: str, vessel_id: int, status: str) -> None:
+        table = self._vessel_table(vessel_type)
+        self._conn.execute(
+            f"UPDATE {table} SET status = ? WHERE id = ?",
+            (status, int(vessel_id)),
+        )
+
+    def set_vessel_site(self, vessel_type: str, vessel_id: int, site_id: int) -> None:
+        table = self._vessel_table(vessel_type)
+        self._conn.execute(
+            f"UPDATE {table} SET site_id = ? WHERE id = ?",
+            (int(site_id), int(vessel_id)),
+        )
+
+    # --- vessel equipment ---------------------------------------------
+
+    def install_vessel_equipment(
+        self, vessel_type: str, vessel_id: int, sku: str
+    ) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO vessel_equipment (vessel_type, vessel_id, sku, "
+            "installed_at) VALUES (?, ?, ?, ?)",
+            (vessel_type, int(vessel_id), sku, iso(now_utc())),
+        )
+        return cur.lastrowid or 0
+
+    def list_vessel_equipment(
+        self,
+        vessel_type: str | None = None,
+        vessel_id: int | None = None,
+    ) -> list[dict]:
+        clauses, binds = [], []
+        if vessel_type is not None:
+            clauses.append("vessel_type = ?")
+            binds.append(vessel_type)
+        if vessel_id is not None:
+            clauses.append("vessel_id = ?")
+            binds.append(int(vessel_id))
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = self._conn.execute(
+            f"SELECT id, vessel_type, vessel_id, sku, installed_at "
+            f"FROM vessel_equipment{where} ORDER BY id",
+            tuple(binds),
+        ).fetchall()
+        return [
+            {
+                "id": r[0],
+                "vessel_type": r[1],
+                "vessel_id": r[2],
+                "sku": r[3],
+                "installed_at": r[4],
+            }
+            for r in rows
+        ]
+
+    def get_vessel_equipment(self, equipment_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT id, vessel_type, vessel_id, sku, installed_at "
+            "FROM vessel_equipment WHERE id = ?",
+            (int(equipment_id),),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0], "vessel_type": row[1], "vessel_id": row[2],
+            "sku": row[3], "installed_at": row[4],
+        }
+
+    def remove_vessel_equipment(self, equipment_id: int) -> None:
+        self._conn.execute(
+            "DELETE FROM vessel_equipment WHERE id = ?", (int(equipment_id),)
+        )
+
+    # --- vessel orders ------------------------------------------------
+
+    def create_vessel_order(
+        self,
+        vessel_type: str,
+        vessel_id: int,
+        kind: str,
+        params_json: str,
+        eta_iso: str,
+        payout_usd: int,
+    ) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO vessel_orders (vessel_type, vessel_id, kind, "
+            "params_json, state, started_at, eta_utc, payout_usd) "
+            "VALUES (?, ?, ?, ?, 'active', ?, ?, ?)",
+            (
+                vessel_type, int(vessel_id), kind, params_json,
+                iso(now_utc()), eta_iso, int(payout_usd),
+            ),
+        )
+        return cur.lastrowid or 0
+
+    def set_vessel_order_scheduled_id(self, order_id: int, sid: int) -> None:
+        self._conn.execute(
+            "UPDATE vessel_orders SET scheduled_id = ? WHERE id = ?",
+            (int(sid), int(order_id)),
+        )
+
+    def get_vessel_order(self, order_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT id, vessel_type, vessel_id, kind, params_json, state, "
+            "started_at, eta_utc, payout_usd, scheduled_id, effect_json "
+            "FROM vessel_orders WHERE id = ?",
+            (int(order_id),),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0], "vessel_type": row[1], "vessel_id": row[2],
+            "kind": row[3], "params_json": row[4], "state": row[5],
+            "started_at": row[6], "eta_utc": row[7],
+            "payout_usd": row[8], "scheduled_id": row[9],
+            "effect_json": row[10],
+        }
+
+    def get_active_vessel_order(
+        self, vessel_type: str, vessel_id: int
+    ) -> dict | None:
+        row = self._conn.execute(
+            "SELECT id, vessel_type, vessel_id, kind, params_json, state, "
+            "started_at, eta_utc, payout_usd, scheduled_id, effect_json "
+            "FROM vessel_orders "
+            "WHERE vessel_type = ? AND vessel_id = ? AND state = 'active' "
+            "LIMIT 1",
+            (vessel_type, int(vessel_id)),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0], "vessel_type": row[1], "vessel_id": row[2],
+            "kind": row[3], "params_json": row[4], "state": row[5],
+            "started_at": row[6], "eta_utc": row[7],
+            "payout_usd": row[8], "scheduled_id": row[9],
+            "effect_json": row[10],
+        }
+
+    def list_vessel_orders(
+        self,
+        vessel_type: str | None = None,
+        vessel_id: int | None = None,
+        state: str | None = None,
+    ) -> list[dict]:
+        clauses, binds = [], []
+        if vessel_type is not None:
+            clauses.append("vessel_type = ?")
+            binds.append(vessel_type)
+        if vessel_id is not None:
+            clauses.append("vessel_id = ?")
+            binds.append(int(vessel_id))
+        if state is not None:
+            clauses.append("state = ?")
+            binds.append(state)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = self._conn.execute(
+            f"SELECT id, vessel_type, vessel_id, kind, params_json, state, "
+            f"started_at, eta_utc, payout_usd, scheduled_id, effect_json "
+            f"FROM vessel_orders{where} ORDER BY id DESC",
+            tuple(binds),
+        ).fetchall()
+        return [
+            {
+                "id": r[0], "vessel_type": r[1], "vessel_id": r[2],
+                "kind": r[3], "params_json": r[4], "state": r[5],
+                "started_at": r[6], "eta_utc": r[7],
+                "payout_usd": r[8], "scheduled_id": r[9],
+                "effect_json": r[10],
+            }
+            for r in rows
+        ]
+
+    def set_vessel_order_state(
+        self, order_id: int, state: str, effect_json: str | None = None
+    ) -> None:
+        if effect_json is None:
+            self._conn.execute(
+                "UPDATE vessel_orders SET state = ? WHERE id = ?",
+                (state, int(order_id)),
+            )
+        else:
+            self._conn.execute(
+                "UPDATE vessel_orders SET state = ?, effect_json = ? WHERE id = ?",
+                (state, effect_json, int(order_id)),
+            )
 
     # --- power plants -------------------------------------------------
 

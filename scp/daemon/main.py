@@ -6,7 +6,7 @@ from pathlib import Path
 
 from . import (
     agents, contracts, gameplay, network, outages, payroll, playbooks,
-    procurement, recruitment, sites, training, transport,
+    procurement, recruitment, sites, training, transport, vessel_ops,
 )
 from .clock import from_iso, iso, now_utc
 from .hardware import catalog as hw_catalog
@@ -234,6 +234,26 @@ class Daemon:
                     )
                 else:
                     message = f"contract skipped ({status})"
+
+            elif kind == "vessel_order_complete":
+                result = vessel_ops.on_order_complete(
+                    self.journal, order_id=int(payload["order_id"])
+                )
+                vt = result.get("vessel_type", "vessel")
+                vid = result.get("vessel_id", "?")
+                kindname = result.get("kind", "?")
+                effect = result.get("effect", {}) or {}
+                payout = effect.get("payout_usd", 0)
+                if kindname == "return_to_port":
+                    message = (
+                        f"{vt} {vid} docked at site {effect.get('site_id', '?')}"
+                    )
+                elif payout:
+                    message = (
+                        f"{vt} {vid} completed {kindname}: paid ${payout:,}"
+                    )
+                else:
+                    message = f"{vt} {vid} completed {kindname}"
 
             else:
                 self.journal.append(
@@ -493,6 +513,130 @@ class Daemon:
             return {
                 "type": "list_submarines",
                 "payload": {"submarines": self.journal.list_submarines()},
+            }
+
+        if mtype == "vessel_equipment_catalog":
+            vt = payload.get("vessel_type")
+            vc = payload.get("vessel_class")
+            rows = vessel_ops.list_equipment(vessel_type=vt, vessel_class=vc)
+            return {
+                "type": "vessel_equipment_catalog",
+                "payload": {"equipment": [e.to_dict() for e in rows]},
+            }
+
+        if mtype == "install_vessel_equipment":
+            try:
+                result = vessel_ops.install_equipment(
+                    self.journal,
+                    vessel_type=str(payload["vessel_type"]),
+                    vessel_id=int(payload["vessel_id"]),
+                    sku=str(payload["sku"]),
+                )
+            except ValueError as e:
+                return {"type": "error", "payload": {"error": str(e)}}
+            return {"type": "install_vessel_equipment", "payload": result}
+
+        if mtype == "uninstall_vessel_equipment":
+            try:
+                result = vessel_ops.remove_equipment(
+                    self.journal, equipment_id=int(payload["equipment_id"])
+                )
+            except ValueError as e:
+                return {"type": "error", "payload": {"error": str(e)}}
+            return {"type": "uninstall_vessel_equipment", "payload": result}
+
+        if mtype == "vessel_equipment":
+            return {
+                "type": "vessel_equipment",
+                "payload": {
+                    "equipment": self.journal.list_vessel_equipment(
+                        vessel_type=payload.get("vessel_type"),
+                        vessel_id=(
+                            int(payload["vessel_id"])
+                            if payload.get("vessel_id") is not None else None
+                        ),
+                    )
+                },
+            }
+
+        if mtype == "vessel_order":
+            try:
+                result = vessel_ops.order_vessel(
+                    self.journal, self.scheduler.add,
+                    vessel_type=str(payload["vessel_type"]),
+                    vessel_id=int(payload["vessel_id"]),
+                    kind=str(payload["kind"]),
+                    hours=(
+                        float(payload["hours"])
+                        if payload.get("hours") is not None else None
+                    ),
+                    target_site_id=(
+                        int(payload["target_site_id"])
+                        if payload.get("target_site_id") is not None else None
+                    ),
+                )
+            except ValueError as e:
+                return {"type": "error", "payload": {"error": str(e)}}
+            return {"type": "vessel_order", "payload": result}
+
+        if mtype == "cancel_vessel_order":
+            try:
+                result = vessel_ops.cancel_order(
+                    self.journal,
+                    vessel_type=str(payload["vessel_type"]),
+                    vessel_id=int(payload["vessel_id"]),
+                )
+            except ValueError as e:
+                return {"type": "error", "payload": {"error": str(e)}}
+            return {"type": "cancel_vessel_order", "payload": result}
+
+        if mtype == "vessel_orders":
+            return {
+                "type": "vessel_orders",
+                "payload": {
+                    "orders": self.journal.list_vessel_orders(
+                        vessel_type=payload.get("vessel_type"),
+                        vessel_id=(
+                            int(payload["vessel_id"])
+                            if payload.get("vessel_id") is not None else None
+                        ),
+                        state=payload.get("state"),
+                    )
+                },
+            }
+
+        if mtype == "vessel_detail":
+            vt = str(payload["vessel_type"])
+            vid = int(payload["vessel_id"])
+            try:
+                match = vessel_ops._resolve_vessel(self.journal, vt, vid)
+            except ValueError as e:
+                return {"type": "error", "payload": {"error": str(e)}}
+            equip = self.journal.list_vessel_equipment(vt, vid)
+            # enrich equipment rows with sku name + category
+            enriched = []
+            for eq in equip:
+                e = vessel_ops.get_equipment(eq["sku"])
+                enriched.append({
+                    **eq,
+                    "name": e.name if e else eq["sku"],
+                    "category": e.category if e else "unknown",
+                    "rating": e.rating if e else 0,
+                })
+            active = self.journal.get_active_vessel_order(vt, vid)
+            recent = self.journal.list_vessel_orders(vt, vid)[:5]
+            return {
+                "type": "vessel_detail",
+                "payload": {
+                    "vessel_type": vt,
+                    "vessel": match,
+                    "equipment": enriched,
+                    "sensor_rating": vessel_ops.vessel_sensor_rating(self.journal, vt, vid),
+                    "stealth_rating": vessel_ops.vessel_stealth_rating(self.journal, vt, vid),
+                    "archive_cap_gb": vessel_ops.vessel_archive_capacity_gb(self.journal, vt, vid),
+                    "active_order": active,
+                    "recent_orders": recent,
+                },
             }
 
         if mtype == "list_power_plants":
