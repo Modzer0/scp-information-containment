@@ -26,7 +26,8 @@ class SiteType:
     cooling_kw: int
     default_network: str
     requires_diesel: bool
-    description: str
+    requires_pumps: bool = False
+    description: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -38,6 +39,7 @@ class SiteType:
             "cooling_kw": self.cooling_kw,
             "default_network": self.default_network,
             "requires_diesel": self.requires_diesel,
+            "requires_pumps": self.requires_pumps,
             "description": self.description,
         }
 
@@ -50,11 +52,25 @@ def _add(t: SiteType) -> None:
 
 
 _add(SiteType(
+    "tent", "Temporary tent / field outpost",
+    capex_usd=15_000, lead_time_s=_d(86_400 * 1),
+    power_kw=2, cooling_kw=2,
+    default_network="lte", requires_diesel=True,
+    description="Canvas shelter + ARM kit. Days-to-weeks of tactical use.",
+))
+_add(SiteType(
     "office_closet", "Office rack closet",
     capex_usd=50_000, lead_time_s=_d(86_400 * 3),
     power_kw=5, cooling_kw=5,
     default_network="dsl", requires_diesel=False,
     description="Stealthy but density-limited. Grid-powered office rack.",
+))
+_add(SiteType(
+    "bunker_shallow", "Shallow bunker (reinforced basement)",
+    capex_usd=8_000_000, lead_time_s=_d(86_400 * 60),
+    power_kw=40, cooling_kw=30,
+    default_network="business_fiber", requires_diesel=False,
+    description="Partial EM shielding + blast resistance. No active pumping needed.",
 ))
 _add(SiteType(
     "onprem_dc", "On-premises data center",
@@ -85,11 +101,15 @@ _add(SiteType(
     description="Seafloor compute pod. OTEC-powered; satellite-only comms.",
 ))
 _add(SiteType(
-    "underground", "Underground hardened base",
+    "underground", "Deep underground hardened base",
     capex_usd=200_000_000, lead_time_s=_d(86_400 * 180),
     power_kw=100, cooling_kw=60,      # ground-loop, limited
     default_network="business_fiber", requires_diesel=False,
-    description="Excavated bunker. Inherent EM/memetic shielding + blast protection.",
+    requires_pumps=True,
+    description=(
+        "Excavated deep bunker. Strong EM/memetic shielding + blast protection. "
+        "Requires continuous dewatering pumps — without them the site floods."
+    ),
 ))
 _add(SiteType(
     "antarctica", "Antarctic research station",
@@ -165,6 +185,14 @@ def on_site_established(
     # New sites ship unencrypted — player must install encryption before
     # doing anything sensitive on them.
     journal.set_site_encryption(site_id, "none")
+    # Pump-required sites need dewatering from day 1 or they flood. The
+    # construction cost includes a starter small pump so the site isn't
+    # dead on arrival; upgrade to redundant pumps for reliability.
+    if st.requires_pumps:
+        journal.create_pump(
+            site_id=site_id, sku="pump-system-sm",
+            capacity="small", redundant=False,
+        )
     result = {
         "site_id": site_id,
         "type_id": type_id,
@@ -185,3 +213,12 @@ def site_requires_diesel(journal: Journal, site_id: int) -> bool:
         return False
     st = get_type(match["type"])
     return bool(st and st.requires_diesel)
+
+
+def site_requires_pumps(journal: Journal, site_id: int) -> bool:
+    sites = journal.list_sites()
+    match = next((s for s in sites if s["id"] == site_id), None)
+    if not match:
+        return False
+    st = get_type(match["type"])
+    return bool(st and st.requires_pumps)

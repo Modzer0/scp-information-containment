@@ -55,15 +55,37 @@ _add(Sku(
     "generic-1u-server", "Generic 1U server", "server",
     price_usd=8_000, power_w=400, form_factor="rack_u:1",
     lead_time_s=_d(3600),
-    capabilities={"host_class": "server", "cpu_threads": 32, "ram_gb": 64},
-    description="Entry-level 1U rack server for baseline analysis VMs.",
+    capabilities={
+        "host_class": "server",
+        "cpu_threads": 32,
+        "ram_gb": 64,
+        "storage_gb": 4_000,         # 4 TB NVMe baseline
+    },
+    description="Entry-level 1U rack server. 64 GB RAM, 4 TB NVMe.",
 ))
 _add(Sku(
     "generic-2u-server", "Generic 2U server", "server",
     price_usd=18_000, power_w=800, form_factor="rack_u:2",
     lead_time_s=_d(3600),
-    capabilities={"host_class": "server", "cpu_threads": 64, "ram_gb": 256},
-    description="Mid-tier 2U server with higher core count and RAM.",
+    capabilities={
+        "host_class": "server",
+        "cpu_threads": 64,
+        "ram_gb": 256,
+        "storage_gb": 24_000,        # 24 TB mixed
+    },
+    description="Mid-tier 2U server. 256 GB RAM, 24 TB storage.",
+))
+_add(Sku(
+    "container-compute-20ft", "20-ft compute container", "server",
+    price_usd=500_000, power_w=25_000, form_factor="iso_container:20",
+    lead_time_s=_d(86_400 * 60),
+    capabilities={
+        "host_class": "server",
+        "cpu_threads": 512,
+        "ram_gb": 2_048,
+        "storage_gb": 100_000,       # 100 TB on-container
+    },
+    description="Self-contained 20-ft ISO compute container. Ships to any site.",
 ))
 _add(Sku(
     "invidia-dgz-pod", "Invidia DGZ pod (8x I300 Blackhall)", "aipod",
@@ -73,6 +95,8 @@ _add(Sku(
         "host_class": "aipod",
         "ai_accel": "I300",
         "count": 8,
+        "ram_gb": 1_024,
+        "storage_gb": 100_000,       # 100 TB fast scratch
         "analysis_speedup": 2.0,
     },
     description="Containerized AI training pod; halves analyze duration.",
@@ -83,6 +107,8 @@ _add(Sku(
     lead_time_s=_d(86_400 * 14),
     capabilities={
         "host_class": "mainframe",
+        "ram_gb": 2_048,
+        "storage_gb": 50_000,        # 50 TB mainframe DASD
         "max_lpars": 10,
         "auto_vm_spec": {
             "memory_encryption": 10,
@@ -320,6 +346,13 @@ _add(Sku(
     capabilities={"capacity_gb": 5_000_000, "array_type": "hybrid"},
     description="SSD cache + HDD bulk. Enterprise-tier working storage.",
 ))
+_add(Sku(
+    "container-storage-20ft", "20-ft storage container (10 PB hybrid)", "storage_array",
+    price_usd=400_000, power_w=4_000, form_factor="iso_container:20",
+    lead_time_s=_d(86_400 * 60),
+    capabilities={"capacity_gb": 10_000_000, "array_type": "hybrid"},
+    description="Self-contained 20-ft ISO storage container. Ships + cabled on-site.",
+))
 
 # --- Tape libraries (cold archive for archived items) ----------------
 
@@ -343,6 +376,29 @@ _add(Sku(
     lead_time_s=_d(86_400 * 180),
     capabilities={"capacity_gb": 50_000_000},
     description="Foundation-tier deep archive. Requires dedicated room.",
+))
+
+# --- Dewatering pump systems (mandatory for underground sites) -------
+
+_add(Sku(
+    "pump-system-sm", "Dewatering pump system (small)", "pump_system",
+    price_usd=50_000, power_w=5_000, form_factor="facility",
+    lead_time_s=_d(86_400 * 7),
+    capabilities={"capacity": "small", "redundant": False},
+    description=(
+        "Basic dewatering setup. One installed pump_system satisfies the "
+        "pump requirement for underground sites."
+    ),
+))
+_add(Sku(
+    "pump-system-lg-redundant", "Dewatering pump system (N+1 redundant)", "pump_system",
+    price_usd=200_000, power_w=20_000, form_factor="facility",
+    lead_time_s=_d(86_400 * 30),
+    capabilities={"capacity": "large", "redundant": True},
+    description=(
+        "Redundant N+1 pump array with backup power tie-in. Survives "
+        "individual pump failures."
+    ),
 ))
 
 # --- Host modules (in-place RAM / storage upgrades per host) ---------

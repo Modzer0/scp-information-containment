@@ -438,6 +438,12 @@ class Daemon:
                 "payload": {"power_plants": self.journal.list_power_plants()},
             }
 
+        if mtype == "list_pumps":
+            return {
+                "type": "list_pumps",
+                "payload": {"pumps": self.journal.list_pumps()},
+            }
+
         if mtype == "list_outages":
             return {
                 "type": "list_outages",

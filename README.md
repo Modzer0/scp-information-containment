@@ -126,9 +126,18 @@ Type `quit` to exit the TUI (daemon keeps running).
 - Acquire refused when site quarantine storage is full
 - Archive refused / re-routes to an alternate site if local tape is full
 - Items auto-encrypted at rest when site has any link-encryption installed (software+); otherwise `unencrypted_at_rest` event fires
-- Buy `storage_array` SKUs (48 TB SSD → 5 PB hybrid) to expand working storage
+- All `server` / `aipod` / `mainframe` SKUs now declare default storage (1U=4TB, 2U=24TB, DGZ pod=100TB, Ibex mainframe=50TB)
+- Containerized units: `container-compute-20ft` (500k, 2 TB RAM + 100 TB storage), `container-storage-20ft` (400k, 10 PB hybrid)
+- Buy `storage_array` SKUs (48 TB SSD → 5 PB hybrid → 10 PB container) to expand working storage
 - Buy `tape_library` SKUs (500 TB LTO → 50 PB vault) to expand cold archive
 - Buy `host_module` SKUs (RAM +64/+512 GB, storage +4/+48 TB) to upgrade individual hosts in place
+
+**Site types (9)** — tent → office_closet → field_site → mobidc → bunker_shallow → onprem_dc → subsea_pod → antarctica → underground
+- `tent` ($15k, 1-day lead) — canvas + ARM kit; 2 kW; diesel-dependent
+- `bunker_shallow` ($8M, 60-day) — reinforced basement; partial shielding
+- `underground` ($200M, 180-day) — deep bunker; strongest shielding; **requires dewatering pumps** or floods
+- `pump_system` SKUs — one `pump-system-sm` ($50k) auto-installed on underground establishment; redundant N+1 available at $200k
+- Removing/losing pumps at an underground site → `flooded=True` → power capacity drops to 0
 
 **Infrastructure (80+ SKUs, 17 categories)**
 - Compute: servers, AI pods (Invidia DGZ), mainframes (Ibex Z-class LPARs)

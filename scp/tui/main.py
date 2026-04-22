@@ -691,6 +691,19 @@ class ScpTui(App):
             self._log_reply("trigger_outage", reply)
             return
 
+        if verb == "pumps":
+            reply = await self.client.send({"type": "list_pumps"})
+            pumps = reply.get("payload", {}).get("pumps", [])
+            if not pumps:
+                self._log("[dim]no pumps installed[/]")
+            for pp in pumps:
+                tag = "[green]redundant[/]" if pp["redundant"] else ""
+                self._log(
+                    f"[cyan]#{pp['id']:<3}[/] {pp['capacity']:6s} @site "
+                    f"{pp['site_id']}  {pp['sku']:30s} [{pp['status']}] {tag}"
+                )
+            return
+
         if verb == "power_plants":
             reply = await self.client.send({"type": "list_power_plants"})
             plants = reply.get("payload", {}).get("power_plants", [])
@@ -1511,6 +1524,8 @@ class ScpTui(App):
                 fuel_tag = f" [bold red]FUEL-STARVED[/] (nominal {u.get('power_kw_nominal', 0)}kW)"
             if u.get("outaged"):
                 fuel_tag += " [bold red]GRID-DARK[/]"
+            if u.get("flooded"):
+                fuel_tag += " [bold red]FLOODED (no pumps)[/]"
             ride_h = u.get("ride_through_hours", 0)
             ride_tag = (
                 f"  ride≈{ride_h:.0f}h"

@@ -278,6 +278,17 @@ CREATE TABLE IF NOT EXISTS tape_libraries (
 );
 CREATE INDEX IF NOT EXISTS idx_tape_libraries_site ON tape_libraries(site_id);
 
+CREATE TABLE IF NOT EXISTS pumps (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id         INTEGER NOT NULL,
+    sku             TEXT NOT NULL,
+    capacity        TEXT NOT NULL,     -- small | large
+    redundant       INTEGER NOT NULL DEFAULT 0,
+    status          TEXT NOT NULL,     -- online | offline | maintenance
+    installed_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pumps_site ON pumps(site_id);
+
 CREATE TABLE IF NOT EXISTS contracts (
     id                     INTEGER PRIMARY KEY AUTOINCREMENT,
     contract_type          TEXT NOT NULL,
@@ -1697,9 +1708,49 @@ class Journal:
             (json.dumps(specs), host_id),
         )
 
+    # --- pumps (dewatering for underground sites) ---------------------
+
+    def create_pump(
+        self, site_id: int, sku: str, capacity: str, redundant: bool
+    ) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO pumps (site_id, sku, capacity, redundant, status, "
+            "installed_at) VALUES (?, ?, ?, ?, 'online', ?)",
+            (site_id, sku, capacity, 1 if redundant else 0, iso(now_utc())),
+        )
+        return cur.lastrowid or 0
+
+    def list_pumps(self, site_id: int | None = None) -> list[dict]:
+        if site_id is not None:
+            rows = self._conn.execute(
+                "SELECT id, site_id, sku, capacity, redundant, status, installed_at "
+                "FROM pumps WHERE site_id = ? ORDER BY id",
+                (site_id,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT id, site_id, sku, capacity, redundant, status, installed_at "
+                "FROM pumps ORDER BY id"
+            ).fetchall()
+        return [
+            {
+                "id": r[0], "site_id": r[1], "sku": r[2],
+                "capacity": r[3], "redundant": bool(r[4]),
+                "status": r[5], "installed_at": r[6],
+            } for r in rows
+        ]
+
+    def count_site_pumps(self, site_id: int) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM pumps WHERE site_id = ? AND status = 'online'",
+            (site_id,),
+        ).fetchone()
+        return int(row[0]) if row else 0
+
     # --- reset (wipes all gameplay state; keeps schema) ---------------
 
     RESET_TABLES = (
+        "pumps",
         "tape_libraries",
         "storage_arrays",
         "outages",

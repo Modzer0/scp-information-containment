@@ -17,6 +17,7 @@ POWER_PLANT_CATEGORIES = {"power_plant"}
 RESILIENCE_CATEGORIES = {"battery_bank", "fuel_storage"}
 STORAGE_CATEGORIES = {"storage_array", "tape_library"}
 HOST_MODULE_CATEGORIES = {"host_module"}
+PUMP_CATEGORIES = {"pump_system"}
 AIRFIELD_RANK = ["none", "dirt_strip", "small_airport", "private_airfield"]
 PORT_RANK = ["none", "small_port", "deepwater_port"]
 
@@ -76,6 +77,7 @@ def buy(
     is_resilience = sku.category in RESILIENCE_CATEGORIES
     is_storage = sku.category in STORAGE_CATEGORIES
     is_host_module = sku.category in HOST_MODULE_CATEGORIES
+    is_pump = sku.category in PUMP_CATEGORIES
     is_module = sku.category == "vm_module"
 
     if is_orbital:
@@ -114,7 +116,7 @@ def buy(
             )
         target_vm_id = None
     elif (is_host or is_site_module or is_aircraft or is_ship
-          or is_power_plant or is_resilience or is_storage):
+          or is_power_plant or is_resilience or is_storage or is_pump):
         if target_site_id is None:
             target_site_id = sites[0]["id"]
         if not any(s["id"] == target_site_id for s in sites):
@@ -474,6 +476,17 @@ def on_install_complete(journal: Journal, purchase_id: int) -> dict:
         result.update(
             {"tape_library_id": lib_id, "site_id": site_id, "capacity_gb": cap_gb}
         )
+    elif sku.category == "pump_system":
+        site_id = p["target_site_id"]
+        cap = str(sku.capabilities.get("capacity", "small"))
+        redundant = bool(sku.capabilities.get("redundant", False))
+        pump_id = journal.create_pump(
+            site_id=site_id, sku=sku.sku, capacity=cap, redundant=redundant,
+        )
+        result.update(
+            {"pump_id": pump_id, "site_id": site_id,
+             "capacity": cap, "redundant": redundant}
+        )
     elif sku.category == "host_module":
         # target_vm_id carries the host id for host_module purchases.
         host_id = int(p["target_vm_id"])
@@ -523,6 +536,7 @@ def site_utilization(journal: Journal, site_id: int) -> dict:
     effective_power_cap = int(capacity["power_kw"]) + plant_kw
     fuel_starved = False
     outaged = False
+    flooded = False
     if site_catalog.site_requires_diesel(journal, site_id):
         active_diesel = [
             c for c in journal.list_contracts(
@@ -533,6 +547,11 @@ def site_utilization(journal: Journal, site_id: int) -> dict:
         if not active_diesel:
             effective_power_cap = 0
             fuel_starved = True
+    if site_catalog.site_requires_pumps(journal, site_id):
+        pump_count = journal.count_site_pumps(site_id)
+        if pump_count == 0:
+            effective_power_cap = 0
+            flooded = True
     # Active grid_power outage at site → capacity drops to 0 unless resilience
     # (batteries + fuel) was sufficient to ride through on event arrival.
     active = journal.active_outages(site_id=site_id)
@@ -580,6 +599,7 @@ def site_utilization(journal: Journal, site_id: int) -> dict:
         "power_kw_plants": plant_kw,
         "power_over": power_kw_used > effective_power_cap,
         "fuel_starved": fuel_starved,
+        "flooded": flooded,
         "outaged": outaged,
         "battery_kwh": resilience["battery_kwh"],
         "fuel_hours": resilience["fuel_hours"],
