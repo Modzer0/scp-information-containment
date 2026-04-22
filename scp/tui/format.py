@@ -43,14 +43,21 @@ def humanize_eta(iso_ts: str | None) -> str:
 
 
 def humanize_money(amount: int | float) -> str:
-    """Compact money display: $1.23B / $987M / $5k / $47 / -$12k."""
+    """Compact money display: $1.23T / $4.56B / $987.00M / $5.0k / $47 / -$12k.
+
+    Thresholds use the rounded-display boundary (e.g. `>= 999.5M` rolls
+    into the billion tier) so we never render '$1000.00M' or similar
+    ambiguous values.
+    """
     n = int(amount)
     sign = "-" if n < 0 else ""
     a = abs(n)
-    if a >= 1_000_000_000:
+    if a >= 999_500_000_000:
+        return f"{sign}${a / 1_000_000_000_000:.2f}T"
+    if a >= 999_500_000:
         return f"{sign}${a / 1_000_000_000:.2f}B"
-    if a >= 1_000_000:
+    if a >= 999_500:
         return f"{sign}${a / 1_000_000:.2f}M"
-    if a >= 10_000:
+    if a >= 9_950:
         return f"{sign}${a / 1_000:.1f}k"
     return f"{sign}${a:,}"

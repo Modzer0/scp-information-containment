@@ -794,13 +794,13 @@ class Daemon:
             }
 
         if mtype == "utilization":
-            sites = self.journal.list_sites()
+            _site_rows = self.journal.list_sites()
             return {
                 "type": "utilization",
                 "payload": {
                     "sites": [
                         procurement.site_utilization(self.journal, s["id"])
-                        for s in sites
+                        for s in _site_rows
                     ]
                 },
             }
