@@ -334,6 +334,46 @@ class ScpTui(App):
             inp.value = self._history[self._history_idx]
         inp.cursor_position = len(inp.value)
 
+    async def _maybe_cheat(self, raw_verb: str) -> bool:
+        """Return True if the raw verb matches a hidden cheat code and was
+        handled. Exact case-sensitive match; never surfaced in help, prefix
+        resolution, or typo suggestions."""
+        if raw_verb == "rainbow_dash":
+            try:
+                reply = await self.client.send({"type": "rainbow_dash"})
+            except Exception as e:
+                self._log(f"[red]cheat failed: {e}[/]")
+                return True
+            n = reply.get("payload", {}).get("fired", 0)
+            self._log(
+                f"[bold magenta]⚡ 20% cooler — flushed {n} pending event(s)[/]"
+            )
+            try:
+                await self.refresh_recent()
+                await self._show_sitrep()
+                await self._refresh_statusbar()
+            except Exception:
+                pass
+            return True
+        if raw_verb == "princess_luna":
+            try:
+                reply = await self.client.send({"type": "princess_luna"})
+            except Exception as e:
+                self._log(f"[red]cheat failed: {e}[/]")
+                return True
+            p = reply.get("payload", {})
+            self._log(
+                f"[bold blue]🌙 the Princess of the Night grants +"
+                f"{humanize_money(p.get('delta', 0))} → "
+                f"balance {humanize_money(p.get('balance', 0))}[/]"
+            )
+            try:
+                await self._refresh_statusbar()
+            except Exception:
+                pass
+            return True
+        return False
+
     async def _do_reset(self) -> None:
         try:
             reply = await self.client.send(
@@ -390,6 +430,14 @@ class ScpTui(App):
                     await self._do_reset()
                 return
             self._log(f"[dim]{pending} cancelled[/]")
+            return
+
+        # Check for hidden cheats BEFORE lowercasing / prefix-match, using the
+        # raw typed verb for exact comparison. Nothing about these surfaces in
+        # help, suggestions, or prefix resolution.
+        raw_parts = cmd.split()
+        raw_verb = raw_parts[0] if raw_parts else ""
+        if await self._maybe_cheat(raw_verb):
             return
 
         parts = cmd.split()

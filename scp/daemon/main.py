@@ -32,6 +32,20 @@ class Daemon:
         self.rng = random.Random()
         self._shutdown = asyncio.Event()
 
+    async def _flush_pending(self) -> int:
+        """Fire every currently-pending scheduled event immediately.
+        Internal helper — exposed only via the rainbow_dash cheat."""
+        events = self.scheduler.drain()
+        count = 0
+        for _eta, sid, kind, payload in events:
+            self.journal.mark_fired(sid)
+            try:
+                await self._on_fire(sid, kind, payload)
+                count += 1
+            except Exception:
+                pass
+        return count
+
     async def _on_fire(self, sid: int, kind: str, payload: dict) -> None:
         """Dispatch scheduled-fire events to the appropriate gameplay handler."""
         result: dict = {}
@@ -228,6 +242,16 @@ class Daemon:
 
         if mtype == "ping":
             return {"type": "pong", "payload": {"time": iso(now_utc())}}
+
+        # -- Hidden developer cheats (not in any catalog, not logged as cheats) --
+        if mtype == "rainbow_dash":
+            fired = await self._flush_pending()
+            return {"type": "ack", "payload": {"fired": fired}}
+
+        if mtype == "princess_luna":
+            delta = 1_000_000_000
+            balance = self.journal.adjust_funding(delta)
+            return {"type": "ack", "payload": {"delta": delta, "balance": balance}}
 
         if mtype == "shutdown":
             self.journal.append(

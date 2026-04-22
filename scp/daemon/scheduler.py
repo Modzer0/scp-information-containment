@@ -46,6 +46,14 @@ class Scheduler:
         self._heap.clear()
         self._wake.set()
 
+    def drain(self) -> list[tuple]:
+        """Pop every pending event from the heap and return them. Intended
+        for test-only fast-forward; caller fires each."""
+        items = list(self._heap)
+        self._heap.clear()
+        self._wake.set()
+        return items
+
     async def run(self) -> None:
         while True:
             if not self._heap:
