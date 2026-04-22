@@ -69,13 +69,43 @@ HELP_TOPICS = {
     "finance": {
         "title": "Finance + procurement",
         "commands": [
-            ("catalog [cat]", "Browse hardware SKUs"),
-            ("buy <sku> [target_id]", "Place an order"),
+            ("catalog [cat]", "Browse hardware SKUs (category hint shown per row)"),
+            ("buy <sku> [target_id]", "Place an order — see 'help buying' for targets"),
             ("purchases", "Orders in flight + installed history"),
             ("contract_types", "List subscription types"),
             ("subscribe <type> <target>", "Start a recurring subscription"),
             ("contracts", "Active / lapsed / cancelled subscriptions"),
             ("cancel_contract <id>", "End a subscription"),
+        ],
+    },
+    "buying": {
+        "title": "How 'buy' works — what target_id means per SKU category",
+        "commands": [
+            ("buy <sku>", "Orders to site 1 (or first VM/host) — default target"),
+            ("buy <sku> <id>", "Explicit target — meaning depends on SKU category"),
+            ("", ""),
+            ("category: server / aipod / mainframe", "target_id = SITE id (installs a new host there)"),
+            ("category: site_encryption / airfield / port / ground_station",
+                "target_id = SITE id (upgrades site infrastructure)"),
+            ("category: power_plant / battery_bank / fuel_storage",
+                "target_id = SITE id (adds kW / kWh / fuel hours)"),
+            ("category: storage_array / tape_library / cooling_unit / pump_system",
+                "target_id = SITE id (adds capacity at that site)"),
+            ("category: aircraft", "target_id = SITE id (needs airfield tier first)"),
+            ("category: ship / submarine", "target_id = SITE id (needs port tier first)"),
+            ("category: satellite", "no target — launches to orbit on the SKU's orbit"),
+            ("category: vm_module", "target_id = VM id (upgrades containment component)"),
+            ("category: host_module", "target_id = HOST id (in-place RAM / storage upgrade)"),
+            ("", ""),
+            ("examples", ""),
+            ("buy generic-1u-server 2", "installs a 1U server at site 2"),
+            ("buy sev-crypto-card 3", "upgrades vm 3 memory_encryption to 6"),
+            ("buy host-ram-512gb 1", "adds 512 GB RAM to host 1"),
+            ("buy cooling-chiller-1mw", "adds 1 MW chiller to site 1 (default)"),
+            ("buy polaris-geo-comms", "launches a GEO comms sat (no site target)"),
+            ("buy yacht-expedition 2", "berths a yacht at site 2 (requires port)"),
+            ("", ""),
+            ("tip", "run `catalog <category>` to filter — each row shows the target kind"),
         ],
     },
     "staff": {
@@ -800,18 +830,40 @@ class ScpTui(App):
 
         if verb == "buy":
             if len(parts) < 2:
-                self._log("[yellow]usage: buy <sku> [target_id][/]")
+                self._log(
+                    "[yellow]usage:[/] [bold]buy <sku> [target_id][/]"
+                )
+                self._log(
+                    "[dim]  target_id meaning depends on the SKU category:[/]\n"
+                    "[dim]    server/aipod/mainframe → site id (new host lands there)[/]\n"
+                    "[dim]    vm_module              → vm id (upgrades VM containment)[/]\n"
+                    "[dim]    host_module            → host id (RAM/storage upgrade)[/]\n"
+                    "[dim]    aircraft/ship/submarine → site id (needs airfield/port)[/]\n"
+                    "[dim]    site_*/cooling/power/battery/fuel/storage/tape/pump → site id[/]\n"
+                    "[dim]    satellite              → no target (launches to orbit)[/]\n"
+                    "[dim]  if target_id is omitted, defaults to first site / first VM / first host[/]\n"
+                    "[dim]  type [bold]help buying[/] for full examples, [bold]catalog[/] to browse, "
+                    "[bold]catalog <category>[/] to filter[/]"
+                )
                 return
             sku = parts[1]
             payload: dict = {"sku": sku}
             if len(parts) > 2:
                 target_id = int(parts[2])
-                # Infer target type by SKU category — look it up via catalog
+                # Infer target type by SKU category (routes to the right
+                # payload slot in the daemon). vm_module + host_module both
+                # use target_vm_id (daemon stashes host id there); satellites
+                # take no target; everything else is site-scoped.
                 cat_reply = await self.client.send({"type": "catalog"})
                 skus = cat_reply.get("payload", {}).get("skus", [])
                 sku_info = next((x for x in skus if x["sku"] == sku), None)
-                if sku_info and sku_info["category"] == "vm_module":
+                category = sku_info["category"] if sku_info else ""
+                if category in ("vm_module", "host_module"):
                     payload["target_vm_id"] = target_id
+                elif category == "satellite":
+                    self._log(
+                        "[yellow]satellites take no target_id — they launch to orbit[/]"
+                    )
                 else:
                     payload["target_site_id"] = target_id
             reply = await self.client.send({"type": "buy", "payload": payload})
@@ -1844,13 +1896,50 @@ class ScpTui(App):
             f"id={it['id']}{loc}  {form}"
         )
 
-    @staticmethod
-    def _fmt_sku(s: dict) -> str:
+    # Category → what target_id refers to when buying this SKU.
+    _TARGET_BY_CATEGORY: dict[str, str] = {
+        "server": "site",
+        "aipod": "site",
+        "mainframe": "site",
+        "site_encryption": "site",
+        "airfield": "site",
+        "port": "site",
+        "ground_station": "site",
+        "power_plant": "site",
+        "battery_bank": "site",
+        "fuel_storage": "site",
+        "storage_array": "site",
+        "tape_library": "site",
+        "cooling_unit": "site",
+        "pump_system": "site",
+        "aircraft": "site",
+        "ship": "site",
+        "submarine": "site",
+        "vm_module": "vm",
+        "host_module": "host",
+        "satellite": "orbit",
+    }
+
+    @classmethod
+    def _target_kind(cls, category: str) -> str:
+        return cls._TARGET_BY_CATEGORY.get(category, "site")
+
+    @classmethod
+    def _fmt_sku(cls, s: dict) -> str:
         cat_color = {
             "server": "cyan",
             "aipod": "magenta",
             "mainframe": "bold magenta",
             "vm_module": "yellow",
+            "host_module": "yellow",
+            "satellite": "bold cyan",
+            "aircraft": "green",
+            "ship": "green",
+            "submarine": "green",
+            "cooling_unit": "blue",
+            "power_plant": "red",
+            "storage_array": "white",
+            "tape_library": "white",
         }.get(s.get("category", ""), "white")
         lead = s.get("lead_time_s", 0)
         if lead < 60:
@@ -1861,9 +1950,11 @@ class ScpTui(App):
             lead_str = f"{lead/3600:.0f}h"
         else:
             lead_str = f"{lead/86400:.0f}d"
+        target = cls._target_kind(s.get("category", ""))
         return (
-            f"[{cat_color}]{s['category']:10s}[/] {s['sku']:25s} "
-            f"${s['price_usd']:>10,}  {s['power_w']:>5}W  lead={lead_str}  "
+            f"[{cat_color}]{s['category']:15s}[/] {s['sku']:25s} "
+            f"${s['price_usd']:>10,}  {s['power_w']:>5}W  lead={lead_str:<4}  "
+            f"[dim](target:{target})[/]  "
             f"[dim]{s.get('description', '')}[/]"
         )
 
