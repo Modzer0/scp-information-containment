@@ -41,7 +41,7 @@ HELP_TOPICS = {
             ("transport_methods", "Show truck / air / rail / sea methods"),
             ("transfer_item <ids> <site> [method]", "Ship archived items between sites.  ids: 5 | 3-7 | 1,3,9"),
             ("relocate_host <host> <site> [method]", "Move compute between sites"),
-            ("reassign_staff <staff> <site>", "Send staff between sites"),
+            ("reassign_staff <ids> <site>", "Send staff between sites.  ids: 2 | 2-5 | 1,3,7"),
         ],
     },
     "sites": {
@@ -112,11 +112,11 @@ HELP_TOPICS = {
         "title": "Staff + training + recruitment + autonomy",
         "commands": [
             ("staff", "List roster with skills, clearance, autonomy flag"),
-            ("autonomy <staff> on|off", "Flip a staff member between manual and autonomous operation"),
+            ("autonomy <ids> on|off", "Manual/autonomous mode.  ids: 2 | 2-5 | 1,3,7"),
             ("roles", "List hireable roles (cost, salary, lead time)"),
             ("recruit <role> [site]", "Post a requisition; hire lands at ETA"),
             ("courses", "Training courses with prereqs"),
-            ("enroll <staff> <course>", "Start training"),
+            ("enroll <ids> <course>", "Start training.  ids: 2 | 2-5 | 1,3,7"),
             ("enrollments", "Training in flight + graduations"),
         ],
     },
@@ -660,18 +660,47 @@ class ScpTui(App):
 
         if verb == "autonomy":
             if len(parts) < 3 or parts[2].lower() not in ("on", "off"):
-                self._log("[yellow]usage: autonomy <staff_id> on|off[/]")
+                self._log(
+                    "[yellow]usage: autonomy <staff_id|range|list> on|off[/]"
+                )
                 return
-            reply = await self.client.send(
-                {
-                    "type": "set_autonomy",
-                    "payload": {
-                        "staff_id": int(parts[1]),
-                        "mode": parts[2].lower(),
-                    },
-                }
+            try:
+                staff_ids = self._parse_id_range(parts[1])
+            except ValueError as exc:
+                self._log(f"[red]bad id range: {exc}[/]")
+                return
+            mode = parts[2].lower()
+            if len(staff_ids) == 1:
+                reply = await self.client.send(
+                    {
+                        "type": "set_autonomy",
+                        "payload": {"staff_id": staff_ids[0], "mode": mode},
+                    }
+                )
+                self._log_reply("autonomy", reply)
+                return
+            ok = 0
+            failed: list[tuple[int, str]] = []
+            for sid in staff_ids:
+                try:
+                    reply = await self.client.send(
+                        {
+                            "type": "set_autonomy",
+                            "payload": {"staff_id": sid, "mode": mode},
+                        }
+                    )
+                except Exception as exc:
+                    failed.append((sid, str(exc)))
+                    continue
+                if reply.get("type") == "error":
+                    failed.append((sid, reply.get("payload", {}).get("error", "?")))
+                else:
+                    ok += 1
+            self._log(
+                f"[green]batch autonomy:[/] {ok} ok / {len(staff_ids)} → {mode}"
             )
-            self._log_reply("autonomy", reply)
+            for sid, err in failed:
+                self._log(f"  [red]✗ staff {sid}:[/] {err}")
             return
 
         if verb == "acquire":
@@ -1169,19 +1198,50 @@ class ScpTui(App):
         if verb == "reassign_staff":
             if len(parts) < 3:
                 self._log(
-                    "[yellow]usage: reassign_staff <staff_id> <to_site_id>[/]"
+                    "[yellow]usage: reassign_staff <staff_id|range|list> <to_site_id>[/]"
                 )
                 return
-            reply = await self.client.send(
-                {
-                    "type": "reassign_staff",
-                    "payload": {
-                        "staff_id": int(parts[1]),
-                        "to_site_id": int(parts[2]),
-                    },
-                }
+            try:
+                staff_ids = self._parse_id_range(parts[1])
+            except ValueError as exc:
+                self._log(f"[red]bad id range: {exc}[/]")
+                return
+            to_site = int(parts[2])
+            if len(staff_ids) == 1:
+                reply = await self.client.send(
+                    {
+                        "type": "reassign_staff",
+                        "payload": {
+                            "staff_id": staff_ids[0],
+                            "to_site_id": to_site,
+                        },
+                    }
+                )
+                self._log_reply("reassign_staff", reply)
+                return
+            ok = 0
+            failed: list[tuple[int, str]] = []
+            for sid in staff_ids:
+                try:
+                    reply = await self.client.send(
+                        {
+                            "type": "reassign_staff",
+                            "payload": {"staff_id": sid, "to_site_id": to_site},
+                        }
+                    )
+                except Exception as exc:
+                    failed.append((sid, str(exc)))
+                    continue
+                if reply.get("type") == "error":
+                    failed.append((sid, reply.get("payload", {}).get("error", "?")))
+                else:
+                    ok += 1
+            self._log(
+                f"[green]batch reassign:[/] {ok} ok / {len(staff_ids)} "
+                f"→ site {to_site}"
             )
-            self._log_reply("reassign_staff", reply)
+            for sid, err in failed:
+                self._log(f"  [red]✗ staff {sid}:[/] {err}")
             return
 
         if verb == "site_types":
@@ -1406,18 +1466,51 @@ class ScpTui(App):
 
         if verb == "enroll":
             if len(parts) < 3:
-                self._log("[yellow]usage: enroll <staff_id> <course_id>[/]")
+                self._log(
+                    "[yellow]usage: enroll <staff_id|range|list> <course_id>[/]"
+                )
                 return
-            reply = await self.client.send(
-                {
-                    "type": "enroll",
-                    "payload": {
-                        "staff_id": int(parts[1]),
-                        "course_id": parts[2],
-                    },
-                }
+            try:
+                staff_ids = self._parse_id_range(parts[1])
+            except ValueError as exc:
+                self._log(f"[red]bad id range: {exc}[/]")
+                return
+            course = parts[2]
+            if len(staff_ids) == 1:
+                reply = await self.client.send(
+                    {
+                        "type": "enroll",
+                        "payload": {
+                            "staff_id": staff_ids[0],
+                            "course_id": course,
+                        },
+                    }
+                )
+                self._log_reply("enroll", reply)
+                return
+            ok = 0
+            failed: list[tuple[int, str]] = []
+            for sid in staff_ids:
+                try:
+                    reply = await self.client.send(
+                        {
+                            "type": "enroll",
+                            "payload": {"staff_id": sid, "course_id": course},
+                        }
+                    )
+                except Exception as exc:
+                    failed.append((sid, str(exc)))
+                    continue
+                if reply.get("type") == "error":
+                    failed.append((sid, reply.get("payload", {}).get("error", "?")))
+                else:
+                    ok += 1
+            self._log(
+                f"[green]batch enroll:[/] {ok} ok / {len(staff_ids)} "
+                f"→ {course}"
             )
-            self._log_reply("enroll", reply)
+            for sid, err in failed:
+                self._log(f"  [red]✗ staff {sid}:[/] {err}")
             return
 
         if verb == "enrollments":
