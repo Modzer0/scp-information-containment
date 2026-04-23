@@ -503,6 +503,13 @@ class Journal:
         )
         return cur.lastrowid or 0
 
+    def count_vms_on_host(self, host_id: int) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM vms WHERE host_id = ?",
+            (int(host_id),),
+        ).fetchone()
+        return int(row[0]) if row else 0
+
     def list_vms(self) -> list[dict]:
         rows = self._conn.execute(
             "SELECT v.id, v.host_id, v.name, v.spec, v.status, h.status "

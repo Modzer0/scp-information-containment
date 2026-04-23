@@ -26,6 +26,12 @@ async def test():
             "physical_shielding": 6, "scanner_freshness": 2,
         })
         d.journal.set_site_encryption(1, "type1")
+        # Upgrade the bootstrap host RAM so the 200 GB Euclid items in
+        # section 2 fit in memory under the analyze RAM gate.
+        host = d.journal.get_host(1)
+        specs = dict(host["specs"])
+        specs["ram_gb"] = 512
+        d.journal.update_host_specs(1, specs)
 
         print("=== 1) same-site archive uses base duration ===")
         p = ItemProfile("SCP-8001", "Safe", 3, 1, 0, 0, "t", "t", size_gb=5)

@@ -63,8 +63,9 @@ HELP_TOPICS = {
             ("uninstall_security <equipment_id>", "Remove installed security equipment"),
             ("hire_guards <site> <tier>", "Subscribe to a guard contract (monthly billing)"),
             ("establish_site <type> <name>", "Order a new site"),
-            ("vms", "List VMs + containment + host status"),
+            ("vms", "List VMs + containment + allocated RAM"),
             ("vm <id>", "Full VM containment breakdown with component bars"),
+            ("provision_vm <host_id> [name]", "Create a new VM on a host (divides host RAM across all VMs)"),
             ("hosts", "List hosts"),
             ("host <id>", "Host specs + VMs on it"),
             ("networks", "List network tiers"),
@@ -662,6 +663,35 @@ class ScpTui(App):
                 self._log("[dim]no vms[/]")
             for v in vms:
                 self._log(self._fmt_vm(v))
+            return
+
+        if verb == "provision_vm":
+            if len(parts) < 2:
+                self._log("[yellow]usage: provision_vm <host_id> [name][/]")
+                return
+            try:
+                host_id = int(parts[1])
+            except ValueError:
+                self._log("[red]host id must be an integer[/]")
+                return
+            name = parts[2] if len(parts) > 2 else None
+            payload_ = {"host_id": host_id}
+            if name:
+                payload_["name"] = name
+            reply = await self.client.send(
+                {"type": "provision_vm", "payload": payload_}
+            )
+            if reply.get("type") == "error":
+                self._log(f"[red]{reply['payload'].get('error')}[/]")
+                return
+            r = reply.get("payload", {})
+            self._log(
+                f"[green]✓ VM {r.get('vm_id')} '{r.get('name')}' on host "
+                f"{r.get('host_id')}[/]  "
+                f"count={r.get('vm_count')}/{r.get('max_vms')}  "
+                f"each VM now has [bold]{r.get('allocated_ram_gb')} GB[/] "
+                f"of {r.get('host_ram_gb')} GB host RAM"
+            )
             return
 
         if verb == "hosts":
@@ -2834,9 +2864,15 @@ class ScpTui(App):
     def _fmt_vm(v: dict) -> str:
         spec = v.get("spec", {})
         containment = sum(int(x) for x in spec.values())
+        alloc = v.get("allocated_ram_gb")
+        host_ram = v.get("host_ram_gb")
+        ram_tag = ""
+        if alloc is not None and host_ram:
+            sibs = v.get("siblings_on_host", 1)
+            ram_tag = f" ram={alloc}/{host_ram}GB (÷{sibs})"
         return (
             f"[cyan]vm[/] id={v['id']} {v['name']} on host {v['host_id']} "
-            f"containment={containment} status=[bold]{v['status']}[/] "
+            f"containment={containment}{ram_tag} status=[bold]{v['status']}[/] "
             f"(host=[bold]{v['host_status']}[/])"
         )
 

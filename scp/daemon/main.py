@@ -385,7 +385,32 @@ class Daemon:
             }
 
         if mtype == "list_vms":
-            return {"type": "list_vms", "payload": {"vms": self.journal.list_vms()}}
+            # Enrich every VM with host_ram_gb + allocated_ram_gb so the TUI
+            # can show "16/64 GB" without a second round-trip.
+            vms = self.journal.list_vms()
+            hosts = {h["id"]: h for h in self.journal.list_hosts()}
+            counts: dict[int, int] = {}
+            for v in vms:
+                counts[v["host_id"]] = counts.get(v["host_id"], 0) + 1
+            for v in vms:
+                h = hosts.get(v["host_id"], {})
+                host_ram = int(h.get("specs", {}).get("ram_gb", 0) or 0)
+                n = max(1, counts.get(v["host_id"], 1))
+                v["host_ram_gb"] = host_ram
+                v["allocated_ram_gb"] = host_ram // n
+                v["siblings_on_host"] = n
+            return {"type": "list_vms", "payload": {"vms": vms}}
+
+        if mtype == "provision_vm":
+            try:
+                result = gameplay.provision_vm(
+                    self.journal,
+                    host_id=int(payload["host_id"]),
+                    name=payload.get("name"),
+                )
+            except ValueError as e:
+                return {"type": "error", "payload": {"error": str(e)}}
+            return {"type": "provision_vm", "payload": result}
 
         if mtype == "list_hosts":
             return {"type": "list_hosts", "payload": {"hosts": self.journal.list_hosts()}}

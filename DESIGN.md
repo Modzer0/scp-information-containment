@@ -310,6 +310,38 @@ Encrypted-memory VMs on mainframes are the **only reliable containment for self-
 - Operator cert check against item class
 - Pre-analysis checklist completion required for Euclid+
 
+### 9.4 Multi-VM hosts & memory budget
+
+A host can run multiple VMs. Each VM gets an equal share of the host's
+RAM: `allocated_ram_gb = host_ram_gb // vm_count`. Adding a VM *shrinks*
+every sibling's budget. Removing one doesn't magically resize in-flight
+analyses — you can't provision a new VM while any sibling is busy.
+
+**Per-class VM ceiling:**
+
+| Host class | Cap | Rationale |
+|---|---|---|
+| server    | 32 | Standard hypervisor density |
+| aipod     | 16 | Wants more RAM per VM for large-model analyses |
+| mainframe | 64 | LPAR-style ceiling; each LPAR is still beefy |
+
+Additionally a per-VM RAM floor of 8 GB applies. A 64 GB host tops out at
+8 VMs regardless of class; a 256 GB server at 32 (class cap, not the
+RAM-floor cap of 32).
+
+**Analyze RAM gate:** an item's `size_gb` must fit in the chosen VM's
+`allocated_ram_gb` — no swap, no streaming. A 500 GB Keter requires
+either a 512 GB+ VM (single-VM on a 512 GB host, or single-VM on half of
+a 1 TB host, etc.) or must be declined. This is the mechanical reason
+the high-end compute catalog exists and why mainframes aren't just
+"fancier servers": they're where Keter analysis happens.
+
+Strategic shape this creates:
+- Early game: one modest VM on the bootstrap 64 GB host; Safe only.
+- Mid game: multiple VMs on a mid-tier server for bulk Safe/Euclid.
+- Late game: dedicate a large host to a single VM when a juicy Keter
+  item lands, accept the throughput hit for the capability.
+
 ---
 
 ## 10. Hardware catalog (compute)

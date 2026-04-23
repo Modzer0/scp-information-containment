@@ -169,6 +169,109 @@ def bootstrap_if_empty(journal: Journal) -> None:
     )
 
 
+# --- VM provisioning --------------------------------------------------
+#
+# VMs on the same host share the host's RAM evenly (host_ram / vm_count).
+# Adding a VM shrinks every sibling's allocation, so crowding a 64 GB
+# host with 4 VMs gives each only 16 GB. An analysis can only run if the
+# item's size_gb fits in its VM's allocated_ram_gb.
+#
+# Max VMs per host is gated by both a per-class cap and a per-VM RAM floor
+# (min 8 GB). A 64 GB server: 8 VMs. A 256 GB server: 32. A 2 TB
+# mainframe: 64 (LPAR-style ceiling).
+
+_MIN_RAM_PER_VM_GB = 8
+_MAX_VMS_BY_CLASS = {
+    "server":    32,
+    "aipod":     16,
+    "mainframe": 64,
+}
+
+
+def max_vms_for_host(host: dict) -> int:
+    host_ram = int(host.get("specs", {}).get("ram_gb", 0) or 0)
+    by_ram = max(1, host_ram // _MIN_RAM_PER_VM_GB)
+    by_class = _MAX_VMS_BY_CLASS.get(host.get("class", "server"), 16)
+    return min(by_ram, by_class)
+
+
+def vm_allocated_ram_gb(journal: Journal, vm_id: int) -> int:
+    vm = journal.get_vm(vm_id)
+    if vm is None:
+        return 0
+    host = journal.get_host(vm["host_id"])
+    if host is None:
+        return 0
+    host_ram = int(host.get("specs", {}).get("ram_gb", 0) or 0)
+    n = max(1, journal.count_vms_on_host(vm["host_id"]))
+    return host_ram // n
+
+
+def provision_vm(
+    journal: Journal, host_id: int, name: str | None = None
+) -> dict:
+    """Create an additional VM on a host. Splits the host RAM across all
+    VMs; refuses if no headroom or any sibling VM is busy."""
+    host = journal.get_host(host_id)
+    if host is None:
+        raise ValueError(f"no host {host_id}")
+    if host["status"] != "clean":
+        raise ValueError(
+            f"host {host_id} is '{host['status']}'; only clean hosts can host new VMs"
+        )
+
+    existing_count = journal.count_vms_on_host(host_id)
+    cap = max_vms_for_host(host)
+    if existing_count >= cap:
+        raise ValueError(
+            f"host {host_id} at VM capacity ({existing_count}/{cap}); "
+            f"add RAM or use a bigger host"
+        )
+
+    # Adding a VM shrinks every sibling's allocation — refuse while any
+    # sibling is mid-analysis, otherwise we'd yank RAM out from under it.
+    siblings = [v for v in journal.list_vms() if v["host_id"] == host_id]
+    busy = [v for v in siblings if v["status"] == "busy"]
+    if busy:
+        raise ValueError(
+            f"cannot add VM while siblings are busy: "
+            f"{', '.join(str(v['id']) for v in busy)}. Wait for analyses to complete."
+        )
+
+    new_name = name or f"vm-{host_id}-{existing_count + 1:02d}"
+    vm_id = journal.create_vm(
+        host_id=host_id,
+        name=new_name,
+        spec=seed_vm_spec().to_dict(),
+        status="idle",
+    )
+    # Report the new per-VM RAM allocation for all siblings on the host.
+    host_ram = int(host.get("specs", {}).get("ram_gb", 0) or 0)
+    new_count = existing_count + 1
+    allocated = host_ram // new_count
+    journal.append(
+        "vm_provisioned",
+        "INFO",
+        {
+            "vm_id": vm_id,
+            "host_id": host_id,
+            "name": new_name,
+            "host_ram_gb": host_ram,
+            "vm_count": new_count,
+            "allocated_ram_gb": allocated,
+        },
+    )
+    return {
+        "vm_id": vm_id,
+        "host_id": host_id,
+        "name": new_name,
+        "host_ram_gb": host_ram,
+        "vm_count": new_count,
+        "allocated_ram_gb": allocated,
+        "max_vms": cap,
+    }
+
+
 def _resolve_operator(journal: Journal, operator_id: int | None) -> dict:
     if operator_id is None:
         op = journal.get_player()
@@ -295,6 +398,20 @@ def start_analyze(
         raise ValueError(f"vm {vm_id} is busy")
     if vm["status"] == "offline":
         raise ValueError(f"vm {vm_id} is offline")
+
+    # RAM gate: the item must fit in the VM's allocated memory. VMs on the
+    # same host share the host's RAM evenly (host_ram / vm_count), so
+    # crowding a host with more VMs shrinks the per-VM memory budget. A
+    # 500 GB Keter item can't be analyzed on a 64 GB host, and you can't
+    # squeeze it onto a 256 GB host if you've split it into 8 VMs either.
+    allocated_ram_gb = vm_allocated_ram_gb(journal, vm_id)
+    item_size_gb = float(item.get("size_gb", 0) or 0)
+    if item_size_gb > allocated_ram_gb:
+        raise ValueError(
+            f"item {item_id} ({item_size_gb:.0f} GB) does not fit in VM {vm_id} "
+            f"({allocated_ram_gb} GB allocated). Add host RAM, consolidate VMs "
+            f"on this host, or move the item to a bigger host."
+        )
 
     # Run mistake detection + guardrail (includes site overload / link checks)
     host = journal.get_host(vm["host_id"])
