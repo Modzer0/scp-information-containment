@@ -474,6 +474,56 @@ _add(Sku(
     description="Full-channel memory expansion.",
 ))
 _add(Sku(
+    "host-ram-1tb", "Host RAM upgrade (+1 TB DDR5)", "host_module",
+    price_usd=35_000, power_w=50, form_factor="dimm-bank",
+    lead_time_s=_d(86_400 * 3),
+    capabilities={"host_spec": "ram_gb", "add": 1_024},
+    description=(
+        "16×64 GB DIMM bank. Needed for parallel analysis of mid-Euclid "
+        "items or a single large Euclid on a dedicated VM."
+    ),
+))
+_add(Sku(
+    "host-ram-2tb", "Host RAM upgrade (+2 TB DDR5)", "host_module",
+    price_usd=80_000, power_w=100, form_factor="dimm-bank",
+    lead_time_s=_d(86_400 * 7),
+    capabilities={"host_spec": "ram_gb", "add": 2_048},
+    description=(
+        "Eight-channel workstation memory expansion. Enough for a single "
+        "mid-tier Keter VM."
+    ),
+))
+_add(Sku(
+    "host-ram-4tb", "Host RAM upgrade (+4 TB DDR5)", "host_module",
+    price_usd=200_000, power_w=200, form_factor="dimm-bank",
+    lead_time_s=_d(86_400 * 14),
+    capabilities={"host_spec": "ram_gb", "add": 4_096},
+    description=(
+        "Dual-socket server RAM ceiling. Fits most Keter items on a "
+        "single VM without needing to split the host."
+    ),
+))
+_add(Sku(
+    "host-ram-cxl-8tb", "CXL memory fabric (+8 TB)", "host_module",
+    price_usd=500_000, power_w=400, form_factor="cxl-fabric",
+    lead_time_s=_d(86_400 * 21),
+    capabilities={"host_spec": "ram_gb", "add": 8_192},
+    description=(
+        "CXL 3.0 memory-pool appliance. Requires a server or mainframe "
+        "with CXL fabric; bulk-Keter capable."
+    ),
+))
+_add(Sku(
+    "host-ram-lpar-16tb", "Mainframe LPAR memory (+16 TB)", "host_module",
+    price_usd=1_200_000, power_w=800, form_factor="lpar-bank",
+    lead_time_s=_d(86_400 * 45),
+    capabilities={"host_spec": "ram_gb", "add": 16_384},
+    description=(
+        "Mainframe-class LPAR memory bank. The only option for the largest "
+        "Keter items (multi-TB) kept on a single VM. Long lead time."
+    ),
+))
+_add(Sku(
     "host-storage-nvme-4tb", "NVMe storage (+4 TB)", "host_module",
     price_usd=1_500, power_w=15, form_factor="u.2",
     lead_time_s=_d(3600),
