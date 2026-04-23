@@ -24,7 +24,7 @@ HELP_TOPICS = {
         "commands": [
             ("scan", "Start a scan; candidates surface at completion"),
             ("items [state]", "List ACTIVE items (archived ones live under `archived`)"),
-            ("archived", "Browse archived items with size + site location"),
+            ("archived", "Browse archived items by id (for transfer_item / item commands)"),
             ("item <id>", "Full detail for a single item"),
             ("acquire <ids>", "Move candidate(s) to quarantine.  ids: 5 | 3-7 | 1,3,5"),
             ("analyze <item> <vm> [override]", "Analyze an item on a VM (override bypasses soft rail)"),
@@ -600,6 +600,9 @@ class ScpTui(App):
 
         if verb == "archived":
             # Dedicated archive browser with size + location resolution.
+            # Leads with the item id so the player can grab it for
+            # transfer_item / item / etc. — these ids are the canonical
+            # handle, not the designation string.
             reply = await self.client.send(
                 {"type": "list_items", "payload": {"state": "archived"}}
             )
@@ -613,7 +616,16 @@ class ScpTui(App):
             site_name = {s["id"]: s["name"] for s in sites}
             total_gb = 0.0
             self._log(f"[bold]== archive ({len(items)} items) ==[/]")
-            for it in sorted(items, key=lambda x: x.get("current_site_id") or 0):
+            self._log(
+                "  [dim]id   designation class  H    size      location"
+                "                 enc[/]"
+            )
+            # Sort by current_site_id then id for stable grouping
+            sorted_items = sorted(
+                items,
+                key=lambda x: (x.get("current_site_id") or 0, x.get("id", 0)),
+            )
+            for it in sorted_items:
                 total_gb += float(it.get("size_gb", 0) or 0)
                 color = {
                     "Safe": "green", "Euclid": "yellow", "Keter": "red",
@@ -623,11 +635,18 @@ class ScpTui(App):
                 )
                 enc = "🔒" if it.get("encrypted_at_rest") else "[red]!!unenc[/]"
                 self._log(
-                    f"  [{color}]{it['designation']:10s}[/] [{color}]{it['class']:6s}[/] "
+                    f"  [bold cyan]{it['id']:>3}[/]  "
+                    f"[{color}]{it['designation']:10s}[/] "
+                    f"[{color}]{it['class']:6s}[/] "
                     f"H={it['hazard_strength']:<2} "
-                    f"{it.get('size_gb', 0):>8.1f} GB  @{loc:<25s} {enc}"
+                    f"{it.get('size_gb', 0):>8.1f} GB  "
+                    f"@{loc:<25s} {enc}"
                 )
             self._log(f"  [dim]total archive size: {total_gb:,.1f} GB[/]")
+            self._log(
+                "  [dim]transfer: [cyan]transfer_item <id|range|list|all> "
+                "<to_site> [method][/][/]"
+            )
             return
 
         if verb == "vms":
@@ -2156,19 +2175,41 @@ class ScpTui(App):
         active = sum(len(ibs.get(s, [])) for s in
                      ("candidate", "quarantined", "analyzing", "analyzed",
                       "archiving", "in_transit"))
-        archived = len(ibs.get("archived", []))
+        archived_list = ibs.get("archived", [])
+        archived = len(archived_list)
         if active or archived:
             self._log(f"[bold]-- items --[/]")
             for state in ("candidate", "quarantined", "analyzing", "analyzed",
                           "archiving", "in_transit"):
                 xs = ibs.get(state, [])
                 if xs:
-                    self._log(f"  {state:12s}: {len(xs)}  " +
-                              ", ".join(f"{i['designation']}({i['class'][0]})"
-                                        for i in xs[:8]) +
-                              ("..." if len(xs) > 8 else ""))
+                    # Show id:designation so the player can act on them
+                    # (analyze, archive, etc.) without a second lookup.
+                    shown = ", ".join(
+                        f"#{i['id']}:{i['designation']}({i['class'][0]})"
+                        for i in xs[:8]
+                    )
+                    suffix = "..." if len(xs) > 8 else ""
+                    self._log(f"  {state:12s}: {len(xs)}  {shown}{suffix}")
             if archived:
-                self._log(f"  archived    : {archived}  [dim](type 'archived' for detail)[/]")
+                self._log(f"  [bold]archived[/]    : {archived}")
+                # Show archived item ids inline (up to 20) — these are
+                # the handles the player needs for transfer_item.
+                preview = archived_list[:20]
+                color_by_class = {"Safe": "green", "Euclid": "yellow", "Keter": "red"}
+                for it in preview:
+                    c = color_by_class.get(it.get("class", ""), "white")
+                    self._log(
+                        f"    [bold cyan]{it['id']:>3}[/]  "
+                        f"[{c}]{it['designation']:10s}[/] [{c}]{it['class']:6s}[/] "
+                        f"H={it['hazard_strength']:<2} "
+                        f"{it.get('size_gb', 0):>7.1f} GB"
+                    )
+                if archived > 20:
+                    self._log(
+                        f"    [dim]... +{archived - 20} more; "
+                        f"run 'archived' for full list[/]"
+                    )
 
         # Infrastructure additions
         def _section(title, rows, render):
