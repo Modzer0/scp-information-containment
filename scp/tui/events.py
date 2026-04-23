@@ -5,6 +5,11 @@ import json
 from typing import Awaitable, Callable
 
 
+# Match DaemonClient — events can be large (broadcast payloads with
+# full state changes). 64 KB default is too small.
+IPC_MAX_LINE = 16 * 1024 * 1024
+
+
 class SubscriptionClient:
     """Dedicated connection for receiving `event_fired` push messages.
     The main request/reply client can't share this socket — mixing a
@@ -27,7 +32,7 @@ class SubscriptionClient:
 
     async def start(self) -> None:
         self._reader, self._writer = await asyncio.open_connection(
-            self.host, self.port
+            self.host, self.port, limit=IPC_MAX_LINE
         )
         self._writer.write(b'{"type":"subscribe"}\n')
         await self._writer.drain()

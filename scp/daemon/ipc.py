@@ -5,6 +5,14 @@ import json
 from typing import Awaitable, Callable
 
 
+# asyncio's StreamReader buffer defaults to 64 KB. Replies to verbs like
+# site_detail / list_items / vessel_detail grow past that on mature saves
+# and raise ValueError("Separator is found, but chunk is longer than
+# limit"). Raise the ceiling on both sides of the pipe. 16 MB covers
+# realistic sizes with room to spare and matches the client.
+IPC_MAX_LINE = 16 * 1024 * 1024
+
+
 Handler = Callable[[dict], Awaitable[dict]]
 
 
@@ -27,7 +35,7 @@ class IpcServer:
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(
-            self._handle_client, self.host, self.port
+            self._handle_client, self.host, self.port, limit=IPC_MAX_LINE
         )
 
     async def _handle_client(

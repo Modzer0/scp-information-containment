@@ -4,6 +4,14 @@ import asyncio
 import json
 
 
+# asyncio's StreamReader defaults to a 64 KB line buffer. Detail responses
+# (site_detail, list_items on a mature archive, vessel_detail, etc.) blow
+# past that in the late game and throw "Separator is found, but chunk is
+# longer than limit". 16 MB gives comfortable headroom — the same limit
+# the daemon and subscription client use.
+IPC_MAX_LINE = 16 * 1024 * 1024
+
+
 class DaemonClient:
     """Small async client for the daemon's JSON-lines TCP protocol."""
 
@@ -16,7 +24,7 @@ class DaemonClient:
 
     async def connect(self) -> None:
         self._reader, self._writer = await asyncio.open_connection(
-            self.host, self.port
+            self.host, self.port, limit=IPC_MAX_LINE
         )
 
     async def close(self) -> None:
