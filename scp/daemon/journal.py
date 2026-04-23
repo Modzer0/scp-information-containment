@@ -342,6 +342,15 @@ CREATE INDEX IF NOT EXISTS idx_vessel_orders_state
     ON vessel_orders(state);
 CREATE INDEX IF NOT EXISTS idx_vessel_orders_vessel
     ON vessel_orders(vessel_type, vessel_id, state);
+
+CREATE TABLE IF NOT EXISTS site_security_equipment (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    site_id       INTEGER NOT NULL,
+    sku           TEXT NOT NULL,
+    installed_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_site_security_site
+    ON site_security_equipment(site_id);
 """
 
 
@@ -1497,6 +1506,55 @@ class Journal:
     def remove_vessel_equipment(self, equipment_id: int) -> None:
         self._conn.execute(
             "DELETE FROM vessel_equipment WHERE id = ?", (int(equipment_id),)
+        )
+
+    # --- site security equipment -------------------------------------
+
+    def install_site_security(self, site_id: int, sku: str) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO site_security_equipment (site_id, sku, installed_at) "
+            "VALUES (?, ?, ?)",
+            (int(site_id), sku, iso(now_utc())),
+        )
+        return cur.lastrowid or 0
+
+    def list_site_security(self, site_id: int | None = None) -> list[dict]:
+        if site_id is not None:
+            rows = self._conn.execute(
+                "SELECT id, site_id, sku, installed_at "
+                "FROM site_security_equipment WHERE site_id = ? ORDER BY id",
+                (int(site_id),),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT id, site_id, sku, installed_at "
+                "FROM site_security_equipment ORDER BY id"
+            ).fetchall()
+        return [
+            {
+                "id": r[0], "site_id": r[1], "sku": r[2],
+                "installed_at": r[3],
+            }
+            for r in rows
+        ]
+
+    def get_site_security_row(self, equipment_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT id, site_id, sku, installed_at "
+            "FROM site_security_equipment WHERE id = ?",
+            (int(equipment_id),),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0], "site_id": row[1], "sku": row[2],
+            "installed_at": row[3],
+        }
+
+    def remove_site_security(self, equipment_id: int) -> None:
+        self._conn.execute(
+            "DELETE FROM site_security_equipment WHERE id = ?",
+            (int(equipment_id),),
         )
 
     # --- vessel orders ------------------------------------------------

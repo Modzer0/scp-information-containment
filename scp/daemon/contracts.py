@@ -68,6 +68,50 @@ _add(ContractType(
     target="ship",
 ))
 
+# --- Guard contracts (security layer) --------------------------------
+# Bonuses live in security.GUARD_CONTRACT_BONUS keyed by these type_ids.
+# Monthly billing (30-day period).
+_add(ContractType(
+    "guard_watch_single",
+    "Single watch guard (8h/day)",
+    "One licensed guard, day shift only. +3 to site security rating.",
+    cost_per_period=6_000,
+    period_seconds=_d(30 * 86_400),
+    target="site",
+))
+_add(ContractType(
+    "guard_watch_shift",
+    "24/7 guard rotation (4 guards)",
+    "Four-guard rotation covering all shifts. +8 to site security rating.",
+    cost_per_period=20_000,
+    period_seconds=_d(30 * 86_400),
+    target="site",
+))
+_add(ContractType(
+    "pmsc_team_light",
+    "PMSC armed detail (6 operators)",
+    "Light armed detail: 6 PMSC operators with SOP for static defense. +15.",
+    cost_per_period=50_000,
+    period_seconds=_d(30 * 86_400),
+    target="site",
+))
+_add(ContractType(
+    "pmsc_team_heavy",
+    "PMSC armed + QRF (12 operators)",
+    "Heavy armed detail plus quick-reaction force. +25 to site rating.",
+    cost_per_period=120_000,
+    period_seconds=_d(30 * 86_400),
+    target="site",
+))
+_add(ContractType(
+    "mtf_squad",
+    "Mobile Task Force squad (8 operators)",
+    "Foundation MTF squad — trained for anomalous-object protection. +40.",
+    cost_per_period=250_000,
+    period_seconds=_d(30 * 86_400),
+    target="site",
+))
+
 
 def list_types() -> list[ContractType]:
     return sorted(TYPES.values(), key=lambda c: c.type_id)

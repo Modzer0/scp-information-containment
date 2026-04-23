@@ -6,7 +6,8 @@ from pathlib import Path
 
 from . import (
     agents, contracts, gameplay, network, outages, payroll, playbooks,
-    procurement, recruitment, sites, training, transport, vessel_ops,
+    procurement, recruitment, security, sites, training, transport,
+    vessel_ops,
 )
 from .clock import from_iso, iso, now_utc
 from .hardware import catalog as hw_catalog
@@ -234,6 +235,19 @@ class Daemon:
                     )
                 else:
                     message = f"contract skipped ({status})"
+
+            elif kind == "security_roll":
+                result = security.on_roll(
+                    self.journal, self.scheduler.add, self.rng
+                )
+                triggered = result.get("triggered", [])
+                if triggered:
+                    # Escalate if anything worse than an attempted breach fired
+                    hard = [t for t in triggered if t.get("kind") != "attempted_breach"]
+                    severity = "ALERT" if hard else "NOTICE"
+                    message = f"{len(triggered)} security incident(s) today"
+                else:
+                    message = ""
 
             elif kind == "vessel_order_complete":
                 result = vessel_ops.on_order_complete(
@@ -515,6 +529,108 @@ class Daemon:
                 "payload": {"submarines": self.journal.list_submarines()},
             }
 
+        if mtype == "security_catalog":
+            guard_rows = []
+            for cid, bonus in sorted(
+                security.GUARD_CONTRACT_BONUS.items(), key=lambda kv: kv[1]
+            ):
+                ct = contracts.get_type(cid)
+                guard_rows.append({
+                    "contract_type": cid,
+                    "bonus": bonus,
+                    "name": ct.name if ct else cid,
+                    "cost_per_period": ct.cost_per_period if ct else 0,
+                    "period_seconds": ct.period_seconds if ct else 0,
+                    "description": ct.description if ct else "",
+                })
+            return {
+                "type": "security_catalog",
+                "payload": {
+                    "equipment": [e.to_dict() for e in security.list_equipment()],
+                    "guard_contracts": guard_rows,
+                },
+            }
+
+        if mtype == "install_security":
+            try:
+                result = security.install_equipment(
+                    self.journal,
+                    site_id=int(payload["site_id"]),
+                    sku=str(payload["sku"]),
+                )
+            except ValueError as e:
+                return {"type": "error", "payload": {"error": str(e)}}
+            return {"type": "install_security", "payload": result}
+
+        if mtype == "uninstall_security":
+            try:
+                result = security.remove_equipment(
+                    self.journal, equipment_id=int(payload["equipment_id"])
+                )
+            except ValueError as e:
+                return {"type": "error", "payload": {"error": str(e)}}
+            return {"type": "uninstall_security", "payload": result}
+
+        if mtype == "hire_guards":
+            # Thin wrapper around contracts.subscribe for guard types.
+            ctype = str(payload["contract_type"])
+            if ctype not in security.GUARD_CONTRACT_BONUS:
+                return {
+                    "type": "error",
+                    "payload": {"error": f"'{ctype}' is not a guard contract type"},
+                }
+            try:
+                result = contracts.subscribe(
+                    self.journal, self.scheduler.add,
+                    type_id=ctype,
+                    target_site_id=int(payload["site_id"]),
+                )
+            except ValueError as e:
+                return {"type": "error", "payload": {"error": str(e)}}
+            return {"type": "hire_guards", "payload": result}
+
+        if mtype == "security_rating":
+            site_id = int(payload["site_id"])
+            return {
+                "type": "security_rating",
+                "payload": security.compute_rating(self.journal, site_id),
+            }
+
+        if mtype == "site_security":
+            # Per-site detailed breakdown + installed equipment rows.
+            site_id = int(payload["site_id"])
+            info = security.compute_rating(self.journal, site_id)
+            equipment = []
+            for row in self.journal.list_site_security(site_id):
+                e = security.get_equipment(row["sku"])
+                equipment.append({
+                    **row,
+                    "name": e.name if e else row["sku"],
+                    "category": e.category if e else "unknown",
+                    "rating_bonus": e.rating_bonus if e else 0,
+                })
+            guards = [
+                {**c, "bonus": security.GUARD_CONTRACT_BONUS.get(c["contract_type"], 0)}
+                for c in self.journal.list_contracts(status="active")
+                if c["target_site_id"] == site_id
+                and c["contract_type"] in security.GUARD_CONTRACT_BONUS
+            ]
+            return {
+                "type": "site_security",
+                "payload": {
+                    "rating": info,
+                    "equipment": equipment,
+                    "guard_contracts": guards,
+                },
+            }
+
+        if mtype == "security_ratings":
+            # Sweep of all sites for a top-level overview.
+            return {
+                "type": "security_ratings",
+                "payload": {"ratings": security.all_ratings(self.journal)},
+            }
+
         if mtype == "vessel_equipment_catalog":
             vt = payload.get("vessel_type")
             vc = payload.get("vessel_class")
@@ -679,6 +795,7 @@ class Daemon:
                 "port_tier": self.journal.get_site_port(site_id),
                 "ground_station_tier": self.journal.get_site_ground_station(site_id),
                 "resilience": self.journal.get_site_resilience(site_id),
+                "security": security.compute_rating(self.journal, site_id),
                 "hosts": hosts_here,
                 "vms": vms_here,
                 "staff": [
@@ -1055,6 +1172,8 @@ class Daemon:
             payroll.schedule_next_payroll(self.scheduler.add)
         if "staff_agent_tick" not in pending_kinds:
             agents.schedule_next_tick(self.scheduler.add)
+        if "security_roll" not in pending_kinds:
+            security.schedule_next_roll(self.scheduler.add)
         print(
             f"SCP daemon listening on {self.ipc.host}:{self.ipc.port}, "
             f"db {self.journal.db_path}"

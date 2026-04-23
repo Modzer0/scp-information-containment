@@ -55,7 +55,13 @@ HELP_TOPICS = {
         "title": "Sites + infrastructure",
         "commands": [
             ("site_types", "List buildable site types"),
-            ("site <id>", "Full dashboard for one site (staff, hosts, VMs, power, cooling, storage, fleet)"),
+            ("site <id>", "Full dashboard for one site (staff, hosts, VMs, power, cooling, storage, fleet, security)"),
+            ("security", "Security-rating overview for every site"),
+            ("site_security <id>", "Per-site security breakdown: base, equipment, guards, incidents"),
+            ("security_catalog", "Browse security-equipment SKUs + guard contract tiers"),
+            ("install_security <site> <sku>", "Install security equipment on a site"),
+            ("uninstall_security <equipment_id>", "Remove installed security equipment"),
+            ("hire_guards <site> <tier>", "Subscribe to a guard contract (monthly billing)"),
             ("establish_site <type> <name>", "Order a new site"),
             ("vms", "List VMs + containment + host status"),
             ("vm <id>", "Full VM containment breakdown with component bars"),
@@ -1505,6 +1511,196 @@ class ScpTui(App):
                 self._log(f"  [red]✗ staff {sid}:[/] {err}")
             return
 
+        if verb == "security":
+            # Overview of every site's rating + a one-line breakdown
+            reply = await self.client.send({"type": "security_ratings"})
+            rows = reply.get("payload", {}).get("ratings", [])
+            if not rows:
+                self._log("[dim]no sites[/]")
+                return
+            self._log(f"[bold]== Site security rating ({len(rows)}) ==[/]")
+            self._log(
+                "  [dim]id   name                     type            "
+                "base  +eq  +gd  total[/]"
+            )
+            for r in rows:
+                total = r.get("total", 0)
+                color = (
+                    "red" if total < 20
+                    else "yellow" if total < 50
+                    else "green"
+                )
+                self._log(
+                    f"  [cyan]{r['site_id']:>3}[/]  "
+                    f"{r.get('site_name', '?'):<24s} "
+                    f"{r.get('site_type', '?'):<14s} "
+                    f"{r.get('base', 0):>4}  {r.get('equipment_bonus', 0):>3}  "
+                    f"{r.get('guard_bonus', 0):>3}  "
+                    f"[{color}]{total:>5}[/]"
+                )
+            self._log(
+                "  [dim]< 20: frequent incidents  |  20-49: occasional  |  "
+                ">= 50: effectively safe[/]"
+            )
+            return
+
+        if verb == "site_security":
+            if len(parts) < 2:
+                self._log("[yellow]usage: site_security <site_id>[/]")
+                return
+            try:
+                sid = int(parts[1])
+            except ValueError:
+                self._log("[red]site id must be an integer[/]")
+                return
+            reply = await self.client.send(
+                {"type": "site_security", "payload": {"site_id": sid}}
+            )
+            if reply.get("type") == "error":
+                self._log(f"[red]{reply['payload'].get('error')}[/]")
+                return
+            p = reply.get("payload", {})
+            rating = p.get("rating", {})
+            total = rating.get("total", 0)
+            color = "red" if total < 20 else "yellow" if total < 50 else "green"
+            self._log(f"[bold]== {rating.get('site_name', '?')} "
+                      f"({rating.get('site_type', '?')}) — rating [{color}]{total}[/] ==[/]")
+            self._log(
+                f"  base={rating.get('base', 0)}  "
+                f"equipment=+{rating.get('equipment_bonus', 0)}  "
+                f"guards=+{rating.get('guard_bonus', 0)}"
+            )
+            # Equipment
+            eq = p.get("equipment", [])
+            if eq:
+                self._log(f"[bold]-- installed equipment ({len(eq)}) --[/]")
+                for e in eq:
+                    self._log(
+                        f"  #{e['id']:>3}  [{e['category']:10s}] "
+                        f"[cyan]{e['sku']:22s}[/] +{e['rating_bonus']:<3}  {e['name']}"
+                    )
+            else:
+                self._log("[dim]  no security equipment installed[/]")
+            # Guards
+            guards = p.get("guard_contracts", [])
+            if guards:
+                self._log(f"[bold]-- active guard contracts ({len(guards)}) --[/]")
+                for g in guards:
+                    self._log(
+                        f"  contract #{g['id']:>3}  {g['contract_type']:20s} "
+                        f"+{g['bonus']:<3}  ${g['cost_per_period']:,}/period  "
+                        f"next bill: {(g.get('next_billing_utc') or '?')[:16]}"
+                    )
+            else:
+                self._log("[dim]  no active guard contracts[/]")
+            return
+
+        if verb == "security_catalog":
+            reply = await self.client.send({"type": "security_catalog"})
+            p = reply.get("payload", {})
+            eq_rows = p.get("equipment", [])
+            self._log(f"[bold]-- Security equipment ({len(eq_rows)}) --[/]")
+            for e in eq_rows:
+                blocked = (
+                    " [dim](blocked on: " + ", ".join(e["blocked_site_types"]) + ")[/]"
+                    if e.get("blocked_site_types") else ""
+                )
+                self._log(
+                    f"  [cyan]{e['sku']:22s}[/] [{e['category']:10s}] "
+                    f"+{e['rating_bonus']:<3} ${e['price_usd']:>9,}  {e['name']}{blocked}"
+                )
+                self._log(f"    [dim]{e['description']}[/]")
+            guards = p.get("guard_contracts", [])
+            self._log(f"[bold]-- Guard contracts ({len(guards)}) --[/]")
+            for g in guards:
+                per = g.get("period_seconds", 0)
+                if per >= 86_400:
+                    per_s = f"{per/86_400:.0f}d"
+                else:
+                    per_s = f"{per/3600:.0f}h"
+                self._log(
+                    f"  [cyan]{g['contract_type']:20s}[/] +{g['bonus']:<3} "
+                    f"${g['cost_per_period']:>8,}/{per_s}  {g['name']}"
+                )
+                self._log(f"    [dim]{g['description']}[/]")
+            return
+
+        if verb == "install_security":
+            if len(parts) < 3:
+                self._log("[yellow]usage: install_security <site_id> <sku>[/]")
+                return
+            try:
+                sid = int(parts[1])
+            except ValueError:
+                self._log("[red]site id must be an integer[/]")
+                return
+            sku = parts[2]
+            reply = await self.client.send({
+                "type": "install_security",
+                "payload": {"site_id": sid, "sku": sku},
+            })
+            if reply.get("type") == "error":
+                self._log(f"[red]{reply['payload'].get('error')}[/]")
+                return
+            r = reply.get("payload", {})
+            self._log(
+                f"[green]✓ installed[/] {sku} on site {sid}  "
+                f"+{r.get('rating_bonus', 0)} rating  "
+                f"-${r.get('price_usd', 0):,}  balance=${r.get('balance', 0):,}"
+            )
+            return
+
+        if verb == "uninstall_security":
+            if len(parts) < 2:
+                self._log("[yellow]usage: uninstall_security <equipment_id>[/]")
+                return
+            try:
+                eid = int(parts[1])
+            except ValueError:
+                self._log("[red]equipment id must be an integer[/]")
+                return
+            reply = await self.client.send({
+                "type": "uninstall_security",
+                "payload": {"equipment_id": eid},
+            })
+            if reply.get("type") == "error":
+                self._log(f"[red]{reply['payload'].get('error')}[/]")
+                return
+            r = reply.get("payload", {})
+            self._log(
+                f"[yellow]✕ removed[/] {r.get('sku')} from site {r.get('site_id')}"
+            )
+            return
+
+        if verb == "hire_guards":
+            if len(parts) < 3:
+                self._log(
+                    "[yellow]usage: hire_guards <site_id> "
+                    "<guard_watch_single|guard_watch_shift|pmsc_team_light|pmsc_team_heavy|mtf_squad>[/]"
+                )
+                return
+            try:
+                sid = int(parts[1])
+            except ValueError:
+                self._log("[red]site id must be an integer[/]")
+                return
+            tier = parts[2]
+            reply = await self.client.send({
+                "type": "hire_guards",
+                "payload": {"site_id": sid, "contract_type": tier},
+            })
+            if reply.get("type") == "error":
+                self._log(f"[red]{reply['payload'].get('error')}[/]")
+                return
+            r = reply.get("payload", {})
+            self._log(
+                f"[green]✓ guard contract #{r.get('contract_id')}[/] "
+                f"{tier} active on site {sid}  "
+                f"next bill: {r.get('next_billing', '?')[:16]}  "
+                f"balance=${r.get('balance', 0):,}"
+            )
+            return
+
         if verb == "site_types":
             reply = await self.client.send({"type": "site_types"})
             for t in reply.get("payload", {}).get("types", []):
@@ -2114,6 +2310,19 @@ class ScpTui(App):
             f"  resilience: battery={res.get('battery_kwh', 0):.0f} kWh  "
             f"fuel={res.get('fuel_hours', 0):.0f} h  "
             f"→ ride≈{u.get('ride_through_hours', 0):.1f} h"
+        )
+        # Security rating
+        sec = d.get("security") or {}
+        sec_total = sec.get("total", 0)
+        sec_col = (
+            "red" if sec_total < 20
+            else "yellow" if sec_total < 50 else "green"
+        )
+        self._log(
+            f"  security: [{sec_col}]{sec_total}[/]  "
+            f"(base {sec.get('base', 0)} + eq {sec.get('equipment_bonus', 0)} "
+            f"+ guards {sec.get('guard_bonus', 0)})  "
+            f"[dim]< 20 = frequent incidents | ≥ 50 = safe[/]"
         )
         # Storage / tape / ram
         stor_col = "red" if u.get("storage_over") else "green"

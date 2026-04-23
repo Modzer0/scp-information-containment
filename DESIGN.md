@@ -560,6 +560,52 @@ needs a `spent_fuel` table, a `waste_storage` SKU category, and
 - Cover: operate as a research flag; periodic inspection events
 - Staff: 6-month tours; recruitment premium
 
+### 13.4 Site security rating
+
+Every site has a numeric `security_rating` computed per-roll as:
+
+    rating = base[site_type] + Σ equipment_bonuses + Σ guard_contract_bonuses
+
+**Base by site type** (tent = 5, field = 8, office_closet = 10, mobidc = 15,
+onprem_dc = 25, oil_platform = 30, bunker_shallow = 45, antarctica = 50,
+underground = 70, subsea_pod = 80). Cheaper hulls are more exposed by
+default — a tent is a sitting duck until you bolt gear to it; a subsea
+pod is effectively unreachable.
+
+**Equipment catalog** (capex, per-site install):
+- *physical:* perimeter fence, hardened safe room, blast doors
+- *access:* RFID + biometric mantrap
+- *detection:* CCTV + NVR, motion sensors, counter-UAS, honeypot network
+- *shielding:* Faraday/TEMPEST
+- *signals:* COMINT mast, ELINT array, IMINT dome (counterintel today;
+  these same SKUs feed rival-site detection in §24.6)
+
+Some SKUs are blocked on site types that can't physically host them
+(no perimeter fence on a subsea pod; no blast doors on a tent).
+
+**Guard contracts** (monthly billing via the contracts layer):
+- `guard_watch_single` +3 ($6k/mo)
+- `guard_watch_shift` +8 ($20k/mo)
+- `pmsc_team_light` +15 ($50k/mo)
+- `pmsc_team_heavy` +25 ($120k/mo)
+- `mtf_squad` +40 ($250k/mo)
+
+Guards lapse when contracts fail to bill — their bonus disappears from
+the rating the instant the contract moves to `lapsed`.
+
+**Incident rolls** fire once per game-day per site. Chance per site is
+`max(0, (50 - rating) / 100)` — linear 50% at rating 0 down to 0% at
+rating 50. When a roll fires, weighted pick:
+
+- `attempted_breach` 50% — logged NOTICE, no damage
+- `sabotage_power` 20% — 2h outage row created
+- `sabotage_host` 20% — random clean host → `suspect`
+- `theft` 10% — random archived SCP at site → `stolen` state; can no
+  longer be transferred, analyzed, or read. Recovery is a future phase.
+
+If an incident can't apply (no clean host, no archived item), it
+degrades to `attempted_breach` rather than failing silently.
+
 ---
 
 ## 14. Maritime fleet
@@ -1502,6 +1548,43 @@ sites from the map and transfer their archive to you.
 
 None of the above is implemented yet — this section captures design intent so
 future phases (12+) can land against a clear vision.
+
+### 24.6 Rival-GOI detection + raids (deferred — extends §13.4 + §14.0)
+
+Today the IMINT dome, COMINT mast, ELINT array (§13.4) and vessel
+sensor gear (§14.0) only raise your own site-security rating — the
+defensive half of the loop. The offensive half, planned for the same
+phase as §24.5 combat mechanics, closes it:
+
+- **Rival sites as hidden entities** — each GOI owns sites with the same
+  attributes you do. Player view is fog-of-war: sites are unknown until
+  a sensor detects them.
+- **Detection formula** — for each unknown rival site, each of your
+  sensor assets rolls against its range / sensitivity / target stealth
+  rating (equivalents of `rf-faraday-shielding` and hardened hulls on
+  the rival side). Successful rolls surface a rough location, then an
+  exact fix, then an infrastructure readout.
+- **IMINT** (`imint-dome` + surveillance aircraft + imagery satellites)
+  — spots sites above-ground, counts power plants, identifies MobiDCs
+  from thermal signature.
+- **COMINT** (`comint-mast` + SIGINT satellite + SSN towed array) —
+  intercepts rival traffic; yields site inhabitants + scope of ops.
+- **ELINT** (`elint-array` + ESM/ELINT suite on subs/ships) —
+  fingerprints rival radar/comms emitters; locates the ISR gear they
+  use against *you*.
+- **Raid pipeline** — once a rival site is fully detected:
+  1. Plan — select insertion (airborne, amphibious, underground approach)
+  2. Breach — MTF squad rolls against rival security rating
+  3. Exfiltrate — their archive contents over secure comms or physical
+  4. Destroy — demolition or leave-in-place for persistent intel
+- **Risk symmetry** — rival GOIs run the same detection loops against
+  you. The same IMINT/COMINT/ELINT gear that lets you see them is what
+  the Faraday shielding and counter-UAS systems (§13.4) are designed to
+  block. High rating == low detectability.
+
+Ship: land §24.5 combat orders first, then rival-GOI world-model as
+hidden entities, then detection rolls, then raid pipeline. Each phase
+is independently shippable.
 
 ---
 
