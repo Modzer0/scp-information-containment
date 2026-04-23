@@ -27,7 +27,7 @@ HELP_TOPICS = {
             ("archived", "Browse archived items by id (for transfer_item / item commands)"),
             ("item <id>", "Full detail for a single item"),
             ("acquire <ids>", "Move candidate(s) to quarantine.  ids: 5 | 3-7 | 1,3,5"),
-            ("analyze <item> <vm> [override]", "Analyze an item on a VM (override bypasses soft rail)"),
+            ("analyze [<item> <vm>] [override]", "Analyze. Bare: auto-pick oldest quarantined + weakest capable VM"),
             ("archive <ids|all> [site]", "Archive analyzed item(s); optional target site = cross-site transmission"),
             ("wipe <host>", "Forensic wipe + reprovision a compromised host"),
         ],
@@ -836,10 +836,31 @@ class ScpTui(App):
             return
 
         if verb == "analyze":
-            if len(parts) < 3:
-                self._log("[yellow]usage: analyze <item_id> <vm_id> [override][/]")
+            # Bare `analyze` auto-picks: oldest quarantined item + the
+            # weakest idle VM that can safely contain it.
+            # `analyze <item> <vm>` is the explicit form; a trailing
+            # `override` flag is honored in both cases.
+            if len(parts) < 2:
+                reply = await self.client.send(
+                    {"type": "analyze", "payload": {"override": False}}
+                )
+                self._log_analyze_reply(reply)
                 return
             override = any(p.lower() == "override" for p in parts[3:])
+            if len(parts) == 2 and parts[1].lower() == "override":
+                # `analyze override` — still auto, but allow soft-rail bypass
+                reply = await self.client.send(
+                    {"type": "analyze", "payload": {"override": True}}
+                )
+                self._log_analyze_reply(reply)
+                return
+            if len(parts) < 3:
+                self._log(
+                    "[yellow]usage: analyze [<item_id> <vm_id>] [override][/]\n"
+                    "[dim]  bare 'analyze' auto-picks the oldest quarantined item "
+                    "and the weakest idle VM that can safely contain it.[/]"
+                )
+                return
             reply = await self.client.send(
                 {
                     "type": "analyze",
@@ -2803,6 +2824,22 @@ class ScpTui(App):
             return
         # ack — success
         rail = p.get("rail_level", "none")
+        # If auto-selected, show exactly what was chosen so the operator
+        # can sanity-check the pairing.
+        if p.get("auto"):
+            cont = p.get("vm_containment", 0)
+            color = {"Safe": "green", "Euclid": "yellow", "Keter": "red"}.get(
+                p.get("item_class", ""), "white"
+            )
+            self._log(
+                f"[bold cyan]auto-picked:[/] "
+                f"item [bold]#{p.get('item_id')}[/] "
+                f"[{color}]{p.get('item_designation')}[/] "
+                f"([{color}]{p.get('item_class')}[/] H={p.get('item_hazard')} "
+                f"{p.get('item_size_gb', 0):.0f} GB) "
+                f"→ VM [bold]#{p.get('vm_id')}[/] '{p.get('vm_name')}' "
+                f"(containment={cont}, ram={p.get('vm_allocated_ram_gb', 0)} GB)"
+            )
         self._log(
             f"[green]analyze ok[/] eta={p.get('eta')} operator={p.get('operator')} "
             f"rail={rail}"

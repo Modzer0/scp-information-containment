@@ -468,14 +468,48 @@ class Daemon:
             }
 
         if mtype == "analyze":
+            # Auto-select when either id is missing: oldest quarantined
+            # item + lowest-capable idle VM that safely handles it.
+            auto = (
+                payload.get("item_id") is None
+                or payload.get("vm_id") is None
+            )
+            auto_pick: dict | None = None
+            if auto:
+                try:
+                    item, vm = gameplay.auto_select_analyze_target(self.journal)
+                except ValueError as e:
+                    return {"type": "error", "payload": {"error": str(e)}}
+                item_id = int(item["id"])
+                vm_id = int(vm["id"])
+                auto_pick = {
+                    "auto": True,
+                    "item_id": item_id,
+                    "item_designation": item["designation"],
+                    "item_class": item["class"],
+                    "item_hazard": item["hazard_strength"],
+                    "item_size_gb": item.get("size_gb", 0),
+                    "vm_id": vm_id,
+                    "vm_name": vm["name"],
+                    "vm_containment": sum(int(x) for x in vm.get("spec", {}).values()),
+                    "vm_allocated_ram_gb": gameplay.vm_allocated_ram_gb(
+                        self.journal, vm_id
+                    ),
+                }
+            else:
+                item_id = int(payload["item_id"])
+                vm_id = int(payload["vm_id"])
+
             result = gameplay.start_analyze(
                 self.journal,
                 self.scheduler.add,
-                item_id=int(payload["item_id"]),
-                vm_id=int(payload["vm_id"]),
+                item_id=item_id,
+                vm_id=vm_id,
                 operator_id=payload.get("operator_id"),
                 override=bool(payload.get("override", False)),
             )
+            if auto_pick is not None:
+                result = {**auto_pick, **result}
             if result.get("blocked"):
                 resp_type = (
                     "needs_override" if result.get("require_override") else "refused"

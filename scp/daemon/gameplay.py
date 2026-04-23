@@ -319,6 +319,115 @@ def provision_vm(
     }
 
 
+def _vm_containment(vm: dict) -> int:
+    spec = vm.get("spec", {}) or {}
+    return sum(int(x) for x in spec.values())
+
+
+def pick_lowest_capable_vm(journal: Journal, item: dict) -> dict | None:
+    """Return the weakest idle VM that still safely contains this item.
+
+    'Safely contains' means:
+      - VM status == idle
+      - Host status == clean (and not wiping)
+      - VM allocated_ram_gb >= item.size_gb (RAM gate)
+      - VM containment >= item.hazard_strength (stable, no leak)
+
+    Among qualifiers, pick lowest containment, then lowest allocated_ram.
+    The idea is to save the Keter-grade hardware for Keter items instead
+    of burning a mainframe LPAR on a Safe picnic blanket.
+    """
+    hazard = int(item.get("hazard_strength", 0))
+    size = float(item.get("size_gb", 0) or 0)
+
+    candidates: list[tuple[int, int, int, dict]] = []
+    for v in journal.list_vms():
+        if v.get("status") != "idle":
+            continue
+        if v.get("host_status") not in ("clean",):
+            continue
+        alloc = vm_allocated_ram_gb(journal, v["id"])
+        if alloc < size:
+            continue
+        cont = _vm_containment(v)
+        if cont < hazard:
+            continue
+        candidates.append((cont, alloc, v["id"], v))
+    if not candidates:
+        return None
+    candidates.sort()   # lowest cont → lowest alloc → lowest id
+    return candidates[0][3]
+
+
+def _diagnose_no_capable_vm(journal: Journal, item: dict) -> str:
+    """One-line explanation of why no VM qualifies."""
+    hazard = int(item.get("hazard_strength", 0))
+    size = float(item.get("size_gb", 0) or 0)
+    vms = journal.list_vms()
+    if not vms:
+        return "no VMs exist — provision_vm on a host first"
+    idle = [
+        v for v in vms
+        if v.get("status") == "idle" and v.get("host_status") == "clean"
+    ]
+    if not idle:
+        busy = sum(1 for v in vms if v.get("status") == "busy")
+        unclean = sum(
+            1 for v in vms if v.get("host_status") not in ("clean",)
+        )
+        bits = []
+        if busy:
+            bits.append(f"{busy} busy")
+        if unclean:
+            bits.append(f"{unclean} on unclean host")
+        return "all VMs unavailable (" + ", ".join(bits or ["none idle"]) + ")"
+    reasons = []
+    best_cont = max(_vm_containment(v) for v in idle)
+    best_ram = max(vm_allocated_ram_gb(journal, v["id"]) for v in idle)
+    if best_cont < hazard:
+        reasons.append(
+            f"best idle VM containment={best_cont}, item needs ≥{hazard}"
+        )
+    if best_ram < size:
+        reasons.append(
+            f"largest idle VM RAM={best_ram} GB, item needs ≥{size:.0f} GB"
+        )
+    # Maybe both individually fit but no single VM satisfies both
+    if not reasons:
+        reasons.append(
+            f"no single VM satisfies both containment ≥{hazard} AND "
+            f"RAM ≥{size:.0f} GB simultaneously"
+        )
+    return "; ".join(reasons)
+
+
+def auto_select_analyze_target(journal: Journal) -> tuple[dict, dict]:
+    """Pick (item, vm) for an unattended `analyze` invocation.
+
+    Rule: the oldest quarantined item (FIFO) paired with the LOWEST
+    capable VM that safely handles it. If the oldest item has no
+    capable VM, try the next, etc. — this lets Safe items go through
+    even when a Keter item is stuck waiting for big iron.
+    """
+    items = journal.list_items(state="quarantined")
+    if not items:
+        raise ValueError("no items awaiting analysis")
+    items.sort(key=lambda i: i["id"])
+    for it in items:
+        vm = pick_lowest_capable_vm(journal, it)
+        if vm is not None:
+            return it, vm
+    # Nothing in the queue can be handled right now. Report the why of
+    # the oldest item — that's the one the player most cares about.
+    reasons = _diagnose_no_capable_vm(journal, items[0])
+    raise ValueError(
+        f"no capable VM for oldest item {items[0]['id']} "
+        f"({items[0]['designation']}, {items[0]['class']} "
+        f"H={items[0]['hazard_strength']}, "
+        f"{items[0].get('size_gb', 0):.0f} GB): {reasons}"
+    )
+
+
 def deprovision_vm(journal: Journal, vm_id: int) -> dict:
     """Tear down a VM. Refuses if the VM is mid-analysis. Items or
     mistake rows referencing this VM are left in place (current_vm_id
