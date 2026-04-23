@@ -412,6 +412,15 @@ class Daemon:
                 return {"type": "error", "payload": {"error": str(e)}}
             return {"type": "provision_vm", "payload": result}
 
+        if mtype == "deprovision_vm":
+            try:
+                result = gameplay.deprovision_vm(
+                    self.journal, vm_id=int(payload["vm_id"])
+                )
+            except ValueError as e:
+                return {"type": "error", "payload": {"error": str(e)}}
+            return {"type": "deprovision_vm", "payload": result}
+
         if mtype == "list_hosts":
             return {"type": "list_hosts", "payload": {"hosts": self.journal.list_hosts()}}
 

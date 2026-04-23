@@ -245,10 +245,14 @@ def on_install_complete(journal: Journal, purchase_id: int) -> dict:
     }
 
     if sku.category in HOST_CATEGORIES:
+        # Stash auto_vm_spec INTO the host specs (not stripped) so future
+        # provision_vm calls on this host inherit the same containment
+        # baseline. Without this, the first VM (created here) gets the
+        # boost but every additional VM would fall back to the seed spec.
         specs = {
             "power_w": sku.power_w,
             "heat_btu_hr": sku.heat_btu_hr,
-            **{k: v for k, v in sku.capabilities.items() if k != "auto_vm_spec"},
+            **{k: v for k, v in sku.capabilities.items()},
         }
         host_id = journal.create_host(
             site_id=p["target_site_id"],
@@ -260,7 +264,8 @@ def on_install_complete(journal: Journal, purchase_id: int) -> dict:
         if sku.category == "mainframe":
             vm_spec = dict(sku.capabilities.get("auto_vm_spec") or {})
         else:
-            vm_spec = seed_vm_spec().to_dict()
+            avs = sku.capabilities.get("auto_vm_spec")
+            vm_spec = dict(avs) if isinstance(avs, dict) and avs else seed_vm_spec().to_dict()
         vm_id = journal.create_vm(
             host_id=host_id,
             name=f"vm-{host_id}-01",

@@ -65,7 +65,8 @@ HELP_TOPICS = {
             ("establish_site <type> <name>", "Order a new site"),
             ("vms", "List VMs + containment + allocated RAM"),
             ("vm <id>", "Full VM containment breakdown with component bars"),
-            ("provision_vm <host_id> [name]", "Create a new VM on a host (divides host RAM across all VMs)"),
+            ("provision_vm <host_id> [name]", "Create a new VM on a host (inherits host base containment; splits RAM)"),
+            ("deprovision_vm <vm_id>", "Tear down a VM; frees its RAM share back to remaining VMs"),
             ("hosts", "List hosts"),
             ("host <id>", "Host specs + VMs on it"),
             ("networks", "List network tiers"),
@@ -685,13 +686,47 @@ class ScpTui(App):
                 self._log(f"[red]{reply['payload'].get('error')}[/]")
                 return
             r = reply.get("payload", {})
+            base = r.get("base_containment", 0)
             self._log(
                 f"[green]✓ VM {r.get('vm_id')} '{r.get('name')}' on host "
                 f"{r.get('host_id')}[/]  "
                 f"count={r.get('vm_count')}/{r.get('max_vms')}  "
+                f"base_containment=[bold]{base}[/]  "
                 f"each VM now has [bold]{r.get('allocated_ram_gb')} GB[/] "
                 f"of {r.get('host_ram_gb')} GB host RAM"
             )
+            return
+
+        if verb == "deprovision_vm":
+            if len(parts) < 2:
+                self._log("[yellow]usage: deprovision_vm <vm_id>[/]")
+                return
+            try:
+                vm_id = int(parts[1])
+            except ValueError:
+                self._log("[red]vm id must be an integer[/]")
+                return
+            reply = await self.client.send(
+                {"type": "deprovision_vm", "payload": {"vm_id": vm_id}}
+            )
+            if reply.get("type") == "error":
+                self._log(f"[red]{reply['payload'].get('error')}[/]")
+                return
+            r = reply.get("payload", {})
+            remaining = r.get("remaining_vms_on_host", 0)
+            alloc = r.get("allocated_ram_gb_each", 0)
+            if remaining:
+                self._log(
+                    f"[yellow]✕ VM {r.get('vm_id')} '{r.get('name')}' removed from host "
+                    f"{r.get('host_id')}[/]  "
+                    f"remaining_vms={remaining}  each now has [bold]{alloc} GB[/]"
+                )
+            else:
+                self._log(
+                    f"[yellow]✕ VM {r.get('vm_id')} '{r.get('name')}' removed from host "
+                    f"{r.get('host_id')}[/]  [dim]host now has no VMs — "
+                    f"provision_vm to use it again[/]"
+                )
             return
 
         if verb == "hosts":

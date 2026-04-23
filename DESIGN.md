@@ -342,6 +342,31 @@ Strategic shape this creates:
 - Late game: dedicate a large host to a single VM when a juicy Keter
   item lands, accept the throughput hit for the capability.
 
+### 9.5 Host-inherited base containment
+
+When a VM is provisioned on a host, it inherits the host's baseline
+containment spec. The mainframe (`ibex-z-base`) ships with
+`auto_vm_spec = {memory_encryption: 10, isolation: 8, mnestic_firmware: 4,
+physical_shielding: 6, scanner_freshness: 2}` — every LPAR starts at
+containment 30, not the generic seed. Servers and AI pods without that
+capability fall back to the seed spec (containment ~6). This is why
+mainframes justify their price tag beyond raw RAM: every LPAR carried
+by the hardware is Keter-ready out of the box.
+
+The `auto_vm_spec` is stored on the host row at install time, so any
+additional VM provisioned later inherits the same baseline (not just
+the first one procurement creates).
+
+### 9.6 VM deprovisioning
+
+VMs can be torn down with `deprovision_vm <vm_id>`. Requirements:
+
+- VM must not be `busy` (in-flight analyses can't have their RAM yanked).
+- Any `current_vm_id` pointer on items referencing this VM is cleared.
+- Freed RAM share is redistributed across remaining VMs on the host.
+- Dropping to zero VMs on a host is allowed — the host remains, and
+  provision_vm can stand one back up.
+
 ---
 
 ## 10. Hardware catalog (compute)

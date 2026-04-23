@@ -207,11 +207,52 @@ def vm_allocated_ram_gb(journal: Journal, vm_id: int) -> int:
     return host_ram // n
 
 
+def _host_base_vm_spec(host: dict) -> dict:
+    """Return the containment spec every new VM on this host should
+    inherit. Preference order:
+
+    1. `auto_vm_spec` stored on the host's specs (procurement stashes
+       it there when a SKU with `auto_vm_spec` is installed — this is
+       the canonical path).
+    2. Backfill for older saves: resolve the SKU from the host name
+       pattern `host-<sku_id>-<purchase_id>` and read its catalog
+       `auto_vm_spec` capability.
+    3. Otherwise the generic seed spec.
+
+    This is why a mainframe LPAR shows up with base containment ~30
+    while a generic 2U server shows up with a near-zero seed — the
+    hardware itself brings memory encryption / LPAR isolation /
+    firmware-level mnestics along for the ride.
+    """
+    specs = host.get("specs", {}) or {}
+    stored = specs.get("auto_vm_spec")
+    if isinstance(stored, dict) and stored:
+        return dict(stored)
+
+    # Backfill for hosts whose specs were written before auto_vm_spec
+    # was stashed on the row. Name format is "host-<sku>-<purchase_id>".
+    name = host.get("name", "") or ""
+    if name.startswith("host-"):
+        stripped = name[5:]
+        last_dash = stripped.rfind("-")
+        if last_dash > 0 and stripped[last_dash + 1:].isdigit():
+            sku_id = stripped[:last_dash]
+            from .hardware import catalog as _hw
+            sku = _hw.get(sku_id)
+            if sku is not None:
+                avs = sku.capabilities.get("auto_vm_spec")
+                if isinstance(avs, dict) and avs:
+                    return dict(avs)
+    return seed_vm_spec().to_dict()
+
+
 def provision_vm(
     journal: Journal, host_id: int, name: str | None = None
 ) -> dict:
     """Create an additional VM on a host. Splits the host RAM across all
-    VMs; refuses if no headroom or any sibling VM is busy."""
+    VMs; refuses if no headroom or any sibling VM is busy. The new VM
+    inherits the host's base containment spec (mainframes seed LPARs
+    with ~30, servers seed with the generic low-base spec)."""
     host = journal.get_host(host_id)
     if host is None:
         raise ValueError(f"no host {host_id}")
@@ -239,16 +280,18 @@ def provision_vm(
         )
 
     new_name = name or f"vm-{host_id}-{existing_count + 1:02d}"
+    base_spec = _host_base_vm_spec(host)
     vm_id = journal.create_vm(
         host_id=host_id,
         name=new_name,
-        spec=seed_vm_spec().to_dict(),
+        spec=base_spec,
         status="idle",
     )
     # Report the new per-VM RAM allocation for all siblings on the host.
     host_ram = int(host.get("specs", {}).get("ram_gb", 0) or 0)
     new_count = existing_count + 1
     allocated = host_ram // new_count
+    base_containment = sum(int(v) for v in base_spec.values())
     journal.append(
         "vm_provisioned",
         "INFO",
@@ -259,6 +302,8 @@ def provision_vm(
             "host_ram_gb": host_ram,
             "vm_count": new_count,
             "allocated_ram_gb": allocated,
+            "base_containment": base_containment,
+            "base_spec": base_spec,
         },
     )
     return {
@@ -269,7 +314,51 @@ def provision_vm(
         "vm_count": new_count,
         "allocated_ram_gb": allocated,
         "max_vms": cap,
+        "base_containment": base_containment,
+        "base_spec": base_spec,
     }
+
+
+def deprovision_vm(journal: Journal, vm_id: int) -> dict:
+    """Tear down a VM. Refuses if the VM is mid-analysis. Items or
+    mistake rows referencing this VM are left in place (current_vm_id
+    is cleared on the item side). The freed RAM share is redistributed
+    across remaining VMs on the host."""
+    vm = journal.get_vm(vm_id)
+    if vm is None:
+        raise ValueError(f"no vm {vm_id}")
+    if vm["status"] == "busy":
+        raise ValueError(
+            f"vm {vm_id} is busy; wait for the in-flight analysis to finish "
+            f"or cancel before deprovisioning"
+        )
+    host_id = vm["host_id"]
+
+    # Clear any item's current_vm_id pointer at this VM so foreign rows
+    # don't dangle. (Items in 'quarantined' with no VM are still valid;
+    # they just aren't tethered to a specific VM anymore.)
+    for it in journal.list_items():
+        if it.get("current_vm_id") == vm_id:
+            journal.set_item_state(
+                it["id"], it["state"], current_vm_id=None
+            )
+
+    journal._conn.execute("DELETE FROM vms WHERE id = ?", (int(vm_id),))
+
+    remaining = journal.count_vms_on_host(host_id)
+    host = journal.get_host(host_id)
+    host_ram = int((host or {}).get("specs", {}).get("ram_gb", 0) or 0)
+    new_alloc = host_ram // max(1, remaining) if remaining else 0
+    result = {
+        "vm_id": vm_id,
+        "host_id": host_id,
+        "name": vm["name"],
+        "remaining_vms_on_host": remaining,
+        "allocated_ram_gb_each": new_alloc,
+        "host_ram_gb": host_ram,
+    }
+    journal.append("vm_deprovisioned", "INFO", result)
+    return result
 
 
 def _resolve_operator(journal: Journal, operator_id: int | None) -> dict:
