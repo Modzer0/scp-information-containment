@@ -998,8 +998,10 @@ class ScpTui(App):
                 self._log(
                     "[dim]  target_id meaning depends on the SKU category:[/]\n"
                     "[dim]    server/aipod/mainframe → site id (new host lands there)[/]\n"
-                    "[dim]    vm_module              → vm id (upgrades VM containment)[/]\n"
+                    "[dim]    compute_module         → site id (unpacks multiple hosts + cooling)[/]\n"
+                    "[dim]    vm_module              → vm id (upgrades a single VM)[/]\n"
                     "[dim]    host_module            → host id (RAM/storage upgrade)[/]\n"
+                    "[dim]    host_containment_module → host id (Faraday/SCSC/mnestic rack-wide)[/]\n"
                     "[dim]    aircraft/ship/submarine → site id (needs airfield/port)[/]\n"
                     "[dim]    site_*/cooling/power/battery/fuel/storage/tape/pump → site id[/]\n"
                     "[dim]    satellite              → no target (launches to orbit)[/]\n"
@@ -1020,7 +1022,7 @@ class ScpTui(App):
                 skus = cat_reply.get("payload", {}).get("skus", [])
                 sku_info = next((x for x in skus if x["sku"] == sku), None)
                 category = sku_info["category"] if sku_info else ""
-                if category in ("vm_module", "host_module"):
+                if category in ("vm_module", "host_module", "host_containment_module"):
                     payload["target_vm_id"] = target_id
                 elif category == "satellite":
                     self._log(
@@ -2875,6 +2877,7 @@ class ScpTui(App):
         "server": "site",
         "aipod": "site",
         "mainframe": "site",
+        "compute_module": "site",
         "site_encryption": "site",
         "airfield": "site",
         "port": "site",
@@ -2891,6 +2894,7 @@ class ScpTui(App):
         "submarine": "site",
         "vm_module": "vm",
         "host_module": "host",
+        "host_containment_module": "host",
         "satellite": "orbit",
     }
 

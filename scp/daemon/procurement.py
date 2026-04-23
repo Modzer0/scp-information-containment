@@ -10,6 +10,9 @@ from .journal import Journal
 
 
 HOST_CATEGORIES = {"server", "aipod", "mainframe"}
+# compute_module is a compound asset that installs multiple hosts + cooling
+# in a single purchase. Targets a site like a regular host.
+COMPUTE_MODULE_CATEGORIES = {"compute_module"}
 SITE_CATEGORIES = {"site_encryption", "airfield", "port", "ground_station"}
 ORBITAL_CATEGORIES = {"satellite"}
 SUBMARINE_CATEGORIES = {"submarine"}
@@ -17,6 +20,8 @@ POWER_PLANT_CATEGORIES = {"power_plant"}
 RESILIENCE_CATEGORIES = {"battery_bank", "fuel_storage"}
 STORAGE_CATEGORIES = {"storage_array", "tape_library"}
 HOST_MODULE_CATEGORIES = {"host_module"}
+# Per-host containment upgrades that also cascade to every VM on the host.
+HOST_CONTAINMENT_MODULE_CATEGORIES = {"host_containment_module"}
 PUMP_CATEGORIES = {"pump_system"}
 COOLING_CATEGORIES = {"cooling_unit"}
 AIRFIELD_RANK = ["none", "dirt_strip", "small_airport", "private_airfield"]
@@ -69,6 +74,7 @@ def buy(
         raise ValueError("no sites exist")
 
     is_host = sku.category in HOST_CATEGORIES
+    is_compute_module = sku.category in COMPUTE_MODULE_CATEGORIES
     is_site_module = sku.category in SITE_CATEGORIES
     is_aircraft = sku.category == "aircraft"
     is_ship = sku.category == "ship"
@@ -78,6 +84,9 @@ def buy(
     is_resilience = sku.category in RESILIENCE_CATEGORIES
     is_storage = sku.category in STORAGE_CATEGORIES
     is_host_module = sku.category in HOST_MODULE_CATEGORIES
+    is_host_containment_module = (
+        sku.category in HOST_CONTAINMENT_MODULE_CATEGORIES
+    )
     is_pump = sku.category in PUMP_CATEGORIES
     is_cooling = sku.category in COOLING_CATEGORIES
     is_module = sku.category == "vm_module"
@@ -117,9 +126,9 @@ def buy(
                 f"currently {journal.count_submarines()}"
             )
         target_vm_id = None
-    elif (is_host or is_site_module or is_aircraft or is_ship
-          or is_power_plant or is_resilience or is_storage or is_pump
-          or is_cooling):
+    elif (is_host or is_compute_module or is_site_module or is_aircraft
+          or is_ship or is_power_plant or is_resilience or is_storage
+          or is_pump or is_cooling):
         if target_site_id is None:
             target_site_id = sites[0]["id"]
         if not any(s["id"] == target_site_id for s in sites):
@@ -173,7 +182,7 @@ def buy(
         if journal.get_vm(int(target_vm_id)) is None:
             raise ValueError(f"no vm {target_vm_id}")
         target_site_id = None
-    elif is_host_module:
+    elif is_host_module or is_host_containment_module:
         # Host upgrades target an existing host by id; we stash the id in
         # target_vm_id so the existing purchase row can carry it.
         if target_vm_id is None:
@@ -506,6 +515,120 @@ def on_install_complete(journal: Journal, purchase_id: int) -> dict:
             {"cooling_unit_id": unit_id, "site_id": site_id,
              "kw_rating": kw, "cooling_type": ctype}
         )
+    elif sku.category == "compute_module":
+        # Compound asset: unpack a bundle of hosts + cooling into the
+        # target site. Each host gets its own VM seeded with the
+        # bundle's auto_vm_spec (or the generic seed).
+        site_id = int(p["target_site_id"])
+        bundle = sku.capabilities.get("bundle") or []
+        installed_hosts: list[int] = []
+        installed_vms: list[int] = []
+        installed_cooling: list[int] = []
+        for entry in bundle:
+            kind = str(entry.get("kind", ""))
+            count = int(entry.get("count", 1))
+            if kind == "host":
+                host_class = str(entry.get("host_class", "server"))
+                host_specs = dict(entry.get("specs", {}) or {})
+                avs = entry.get("auto_vm_spec")
+                if isinstance(avs, dict) and avs:
+                    host_specs["auto_vm_spec"] = dict(avs)
+                name_prefix = str(entry.get("name_prefix", "node"))
+                for i in range(count):
+                    hid = journal.create_host(
+                        site_id=site_id,
+                        name=f"{name_prefix}-{sku.sku}-{purchase_id}-{i + 1:02d}",
+                        host_class=host_class,
+                        specs=dict(host_specs),
+                        status="clean",
+                    )
+                    vm_spec = (
+                        dict(host_specs["auto_vm_spec"])
+                        if "auto_vm_spec" in host_specs
+                        else seed_vm_spec().to_dict()
+                    )
+                    vid = journal.create_vm(
+                        host_id=hid,
+                        name=f"vm-{hid}-01",
+                        spec=vm_spec,
+                        status="idle",
+                    )
+                    installed_hosts.append(hid)
+                    installed_vms.append(vid)
+            elif kind == "cooling":
+                kw = int(entry.get("kw", 0))
+                ctype = str(entry.get("ctype", "crac"))
+                sku_tag = str(entry.get("sku_tag", f"{ctype}-{kw}kw"))
+                for _ in range(count):
+                    cid = journal.create_cooling_unit(
+                        site_id=site_id, sku=sku_tag,
+                        kw_rating=kw, cooling_type=ctype,
+                    )
+                    installed_cooling.append(cid)
+            else:
+                # unknown bundle kind — skip quietly, surface in result
+                result.setdefault("skipped_bundle_entries", []).append(entry)
+        # Optional: bump the site's cooling capacity to reflect integrated
+        # cooling that doesn't fit the per-unit model cleanly.
+        bonus_kw = int(sku.capabilities.get("site_cooling_kw_bonus", 0) or 0)
+        if bonus_kw:
+            # Read current, add. Safe because set_site_capacity takes full values.
+            from .procurement import site_utilization as _su  # local to avoid cycle
+            current = _su(journal, site_id)
+            new_cooling_cap = int(current.get("cooling_kw_capacity", 0)) + bonus_kw
+            journal.set_site_capacity(
+                site_id,
+                power_kw=int(current.get("power_kw_capacity", 0)),
+                cooling_kw=new_cooling_cap,
+            )
+            result["site_cooling_kw_bonus"] = bonus_kw
+        result.update({
+            "site_id": site_id,
+            "hosts": installed_hosts,
+            "vms": installed_vms,
+            "cooling_units": installed_cooling,
+            "host_count": len(installed_hosts),
+            "vm_count": len(installed_vms),
+        })
+
+    elif sku.category == "host_containment_module":
+        # Upgrade a host's baseline containment AND every VM currently on
+        # it. This is the Faraday/mnestic/SCSC tier — one purchase
+        # raises the entire rack's containment for that component.
+        host_id = int(p["target_vm_id"])
+        host = journal.get_host(host_id)
+        if not host:
+            result["error"] = f"target host {host_id} no longer exists"
+        else:
+            comp = str(sku.capabilities.get("vm_component", ""))
+            value = int(sku.capabilities.get("value", 0))
+            specs = dict(host["specs"])
+            avs = dict(specs.get("auto_vm_spec") or {})
+            before_base = int(avs.get(comp, 0))
+            new_base = max(before_base, value)
+            avs[comp] = new_base
+            specs["auto_vm_spec"] = avs
+            journal.update_host_specs(host_id, specs)
+            updated_vms = []
+            for v in journal.list_vms():
+                if v["host_id"] != host_id:
+                    continue
+                vspec = dict(v["spec"])
+                before_v = int(vspec.get(comp, 0))
+                if before_v < new_base:
+                    vspec[comp] = new_base
+                    journal.update_vm_spec(v["id"], vspec)
+                    updated_vms.append({
+                        "vm_id": v["id"], "before": before_v, "after": new_base,
+                    })
+            result.update({
+                "host_id": host_id,
+                "component": comp,
+                "host_baseline_before": before_base,
+                "host_baseline_after": new_base,
+                "vms_updated": updated_vms,
+            })
+
     elif sku.category == "host_module":
         # target_vm_id carries the host id for host_module purchases.
         host_id = int(p["target_vm_id"])

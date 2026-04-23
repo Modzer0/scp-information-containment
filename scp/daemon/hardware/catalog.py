@@ -76,16 +76,76 @@ _add(Sku(
     description="Mid-tier 2U server. 256 GB RAM, 24 TB storage.",
 ))
 _add(Sku(
-    "container-compute-20ft", "20-ft compute container", "server",
+    "container-compute-20ft", "20-ft compute container", "compute_module",
     price_usd=500_000, power_w=25_000, form_factor="iso_container:20",
     lead_time_s=_d(86_400 * 60),
     capabilities={
         "host_class": "server",
-        "cpu_threads": 512,
-        "ram_gb": 2_048,
-        "storage_gb": 100_000,       # 100 TB on-container
+        "bundle": [
+            {
+                "kind": "host", "count": 4, "host_class": "server",
+                "name_prefix": "node",
+                "specs": {
+                    "cpu_threads": 128,
+                    "ram_gb": 512,
+                    "storage_gb": 25_000,   # 25 TB each → 100 TB total
+                    "power_w": 5_500,
+                    "heat_btu_hr": 18_750,
+                },
+            },
+            {
+                "kind": "cooling", "count": 2, "ctype": "rdhx",
+                "kw": 40, "sku_tag": "container-rdhx-40kw",
+            },
+        ],
+        "site_cooling_kw_bonus": 80,
     },
-    description="Self-contained 20-ft ISO compute container. Ships to any site.",
+    description=(
+        "Self-contained 20-ft ISO compute container. Unpacks to 4 × 512 GB "
+        "server nodes (each with its own VM) + 2 RDHX cooling blocks on-site."
+    ),
+))
+_add(Sku(
+    "container-compute-20ft-hs", "20-ft high-security compute container",
+    "compute_module",
+    price_usd=1_800_000, power_w=28_000, form_factor="iso_container:20",
+    lead_time_s=_d(86_400 * 120),
+    capabilities={
+        "host_class": "server",
+        "bundle": [
+            {
+                "kind": "host", "count": 4, "host_class": "server",
+                "name_prefix": "hs-node",
+                "specs": {
+                    "cpu_threads": 128,
+                    "ram_gb": 512,
+                    "storage_gb": 25_000,
+                    "power_w": 6_500,
+                    "heat_btu_hr": 22_175,
+                },
+                # Per-VM baseline: hardware mem-enc 6 + bare-metal iso 5 +
+                # mnestic fw 4 + polarized shielding 4 + live scanner 2 = 21
+                "auto_vm_spec": {
+                    "memory_encryption": 6,
+                    "isolation": 5,
+                    "mnestic_firmware": 4,
+                    "physical_shielding": 4,
+                    "scanner_freshness": 2,
+                },
+            },
+            {
+                "kind": "cooling", "count": 2, "ctype": "rdhx",
+                "kw": 40, "sku_tag": "container-hs-rdhx-40kw",
+            },
+        ],
+        "site_cooling_kw_bonus": 80,
+    },
+    description=(
+        "Hardened 20-ft ISO container — 4 × 512 GB servers pre-sealed in "
+        "Faraday + polarized shielding, mnestic firmware, hardware memory "
+        "encryption, bare-metal isolation. Every VM starts at containment 21 "
+        "out of the box — Euclid-ready on delivery."
+    ),
 ))
 _add(Sku(
     "invidia-dgz-pod", "Invidia DGZ pod (8x I300 Blackhall)", "aipod",
@@ -124,30 +184,87 @@ _add(Sku(
 # --- Panthalassa subsea products (ideal for subsea_pod sites) --------
 
 _add(Sku(
-    "panthalassa-core", "Panthalassa Core pod (subsea compute)", "server",
+    "panthalassa-core", "Panthalassa Core pod (subsea compute)",
+    "compute_module",
     price_usd=10_000_000, power_w=3_000, form_factor="subsea_capsule",
     lead_time_s=_d(86_400 * 90),
     capabilities={
         "host_class": "server",
-        "cpu_threads": 128,
-        "ram_gb": 512,
-        "seawater_cooled": True,
         "recommended_site_type": "subsea_pod",
+        "bundle": [
+            {
+                "kind": "host", "count": 4, "host_class": "server",
+                "name_prefix": "panth-node",
+                "specs": {
+                    "cpu_threads": 128,
+                    "ram_gb": 512,
+                    "storage_gb": 12_000,
+                    "power_w": 600,
+                    "heat_btu_hr": 2_046,
+                    "seawater_cooled": True,
+                },
+                # Seawater housing adds physical shielding out of the box
+                "auto_vm_spec": {
+                    "memory_encryption": 3,
+                    "isolation": 2,
+                    "mnestic_firmware": 0,
+                    "physical_shielding": 4,  # pressure-hull + EM shielding
+                    "scanner_freshness": 1,
+                },
+            },
+            {
+                "kind": "cooling", "count": 2, "ctype": "seawater_loop",
+                "kw": 60, "sku_tag": "panthalassa-seawater-loop",
+            },
+        ],
+        "site_cooling_kw_bonus": 120,
     },
-    description="Subsea capsule, seawater-cooled. Ideal at subsea_pod sites.",
+    description=(
+        "Subsea capsule, seawater-cooled. Unpacks to 4 × 512 GB nodes (each "
+        "with its own VM, baseline containment 10 from pressure-hull EM "
+        "shielding) + 2 seawater cooling loops. Ideal at subsea_pod sites."
+    ),
 ))
 _add(Sku(
-    "panthalassa-array", "Panthalassa Array (subsea compute cluster)", "server",
+    "panthalassa-array", "Panthalassa Array (subsea compute cluster)",
+    "compute_module",
     price_usd=45_000_000, power_w=12_000, form_factor="subsea_capsule",
     lead_time_s=_d(86_400 * 180),
     capabilities={
         "host_class": "server",
-        "cpu_threads": 512,
-        "ram_gb": 2_048,
-        "seawater_cooled": True,
         "recommended_site_type": "subsea_pod",
+        "bundle": [
+            {
+                "kind": "host", "count": 8, "host_class": "server",
+                "name_prefix": "panth-array-node",
+                "specs": {
+                    "cpu_threads": 256,
+                    "ram_gb": 1_024,
+                    "storage_gb": 25_000,
+                    "power_w": 1_400,
+                    "heat_btu_hr": 4_774,
+                    "seawater_cooled": True,
+                },
+                "auto_vm_spec": {
+                    "memory_encryption": 3,
+                    "isolation": 2,
+                    "mnestic_firmware": 0,
+                    "physical_shielding": 4,
+                    "scanner_freshness": 1,
+                },
+            },
+            {
+                "kind": "cooling", "count": 4, "ctype": "seawater_loop",
+                "kw": 80, "sku_tag": "panthalassa-array-seawater-loop",
+            },
+        ],
+        "site_cooling_kw_bonus": 320,
     },
-    description="Large subsea cluster capsule. Full-rack compute under seawater.",
+    description=(
+        "Large subsea cluster capsule. Unpacks to 8 × 1 TB nodes (each with "
+        "its own VM, baseline containment 10) + 4 seawater cooling loops. "
+        "Full-rack compute under seawater."
+    ),
 ))
 _add(Sku(
     "panthalassa-vault", "Panthalassa Vault (subsea cold archive)", "server",
@@ -574,6 +691,81 @@ _add(Sku(
     lead_time_s=_d(86_400 * 30),
     capabilities={"vm_component": "physical_shielding", "value": 6},
     description="SCSC-grade facility. physical_shielding=6.",
+))
+
+# --- Host-wide containment modules ------------------------------------
+#
+# These install against a HOST (not a single VM). One purchase raises the
+# specified containment component for the host's baseline (auto_vm_spec)
+# AND every VM currently running on that host. A fresh VM provisioned on
+# the host afterwards inherits the new baseline automatically. Buys you
+# rack-wide protection in one shot instead of per-VM retrofit.
+
+_add(Sku(
+    "host-faraday-cage", "Host-wide Faraday cage enclosure",
+    "host_containment_module",
+    price_usd=180_000, power_w=0, form_factor="rack_u:8",
+    lead_time_s=_d(86_400 * 3),
+    capabilities={"vm_component": "physical_shielding", "value": 2},
+    description=(
+        "EM-shielded rack-row enclosure. Bumps physical_shielding to 2 "
+        "on the host AND every VM on it; new VMs inherit automatically."
+    ),
+))
+_add(Sku(
+    "host-polarized-shielding", "Host polarized shielding retrofit",
+    "host_containment_module",
+    price_usd=500_000, power_w=0, form_factor="rack_row",
+    lead_time_s=_d(86_400 * 14),
+    capabilities={"vm_component": "physical_shielding", "value": 4},
+    description=(
+        "Polarized optical + EM shielding for the full rack. "
+        "physical_shielding=4 on host + all VMs."
+    ),
+))
+_add(Sku(
+    "host-scsc-vault", "Host SCSC-grade vault install",
+    "host_containment_module",
+    price_usd=1_400_000, power_w=0, form_factor="facility",
+    lead_time_s=_d(86_400 * 45),
+    capabilities={"vm_component": "physical_shielding", "value": 6},
+    description=(
+        "SCSC-class hardened vault around the entire host. "
+        "physical_shielding=6 on host + all VMs."
+    ),
+))
+_add(Sku(
+    "host-mnestic-firmware", "Host-wide mnestic firmware package",
+    "host_containment_module",
+    price_usd=220_000, power_w=0, form_factor="software",
+    lead_time_s=_d(86_400 * 2),
+    capabilities={"vm_component": "mnestic_firmware", "value": 4},
+    description=(
+        "Firmware flash applied to host + every VM. "
+        "mnestic_firmware=4 rack-wide."
+    ),
+))
+_add(Sku(
+    "host-hw-memenc", "Host-wide hardware memory encryption",
+    "host_containment_module",
+    price_usd=320_000, power_w=40, form_factor="rack_u:2",
+    lead_time_s=_d(86_400 * 7),
+    capabilities={"vm_component": "memory_encryption", "value": 6},
+    description=(
+        "SEV-class hardware crypto at the host level; every VM on the "
+        "host gets memory_encryption=6."
+    ),
+))
+_add(Sku(
+    "host-bare-metal-isolation", "Host bare-metal isolation retrofit",
+    "host_containment_module",
+    price_usd=260_000, power_w=0, form_factor="software",
+    lead_time_s=_d(86_400 * 5),
+    capabilities={"vm_component": "isolation", "value": 5},
+    description=(
+        "Reconfigures the host + every VM to bare-metal partition mode. "
+        "isolation=5 on all."
+    ),
 ))
 
 # --- Site encryption equipment (gates commercial-link data handling) --

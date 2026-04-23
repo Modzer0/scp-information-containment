@@ -367,6 +367,63 @@ VMs can be torn down with `deprovision_vm <vm_id>`. Requirements:
 - Dropping to zero VMs on a host is allowed — the host remains, and
   provision_vm can stand one back up.
 
+### 9.7 Compound compute modules
+
+Some catalog items aren't single hosts — they're shipping containers or
+subsea capsules that unpack into multiple hosts plus cooling equipment.
+The `compute_module` category describes this via a `bundle` list:
+
+```
+panthalassa-core (compute_module):
+  bundle:
+    - kind: host   count: 4  host_class: server
+      specs: {ram_gb: 512, storage_gb: 12_000, ...}
+      auto_vm_spec: {physical_shielding: 4, ...}   # cont 10 per VM
+    - kind: cooling  count: 2  ctype: seawater_loop  kw: 60
+  site_cooling_kw_bonus: 120
+```
+
+Installation fans out: one purchase creates N host rows (each with its
+own seeded VM carrying the bundle's `auto_vm_spec`), M cooling unit
+rows, and optionally bumps the site's cooling capacity via
+`site_cooling_kw_bonus`. Pricing is carried by the compound SKU — the
+bundle children don't bill separately.
+
+Current compound modules:
+
+| SKU | Hosts | Cooling | Per-VM Cont | Notes |
+|---|---|---|---|---|
+| `container-compute-20ft` | 4 × 512 GB | 2 × RDHX 40kW | seed ~6 | Generic field DC |
+| `container-compute-20ft-hs` | 4 × 512 GB | 2 × RDHX 40kW | **21** | Hardened: Faraday + SCSC + mnestic + SEV + bare-metal |
+| `panthalassa-core` | 4 × 512 GB | 2 × seawater loop | 10 | Subsea-hardened housing |
+| `panthalassa-array` | 8 × 1 TB | 4 × seawater loop | 10 | Full-rack subsea |
+
+### 9.8 Host-wide containment modules
+
+Previously, upgrading a host full of VMs to Faraday-grade shielding meant
+buying one `vm_module` per VM. New category `host_containment_module`
+solves this: one purchase targets a HOST and applies to:
+
+1. The host's stored `auto_vm_spec` (so newly provisioned VMs inherit),
+2. Every VM currently on the host (taking `max(existing, new)` so it
+   never downgrades).
+
+Catalog (all take-max cascades):
+
+| SKU | Component | Value |
+|---|---|---|
+| `host-faraday-cage` | physical_shielding | 2 |
+| `host-polarized-shielding` | physical_shielding | 4 |
+| `host-scsc-vault` | physical_shielding | 6 |
+| `host-mnestic-firmware` | mnestic_firmware | 4 |
+| `host-hw-memenc` | memory_encryption | 6 |
+| `host-bare-metal-isolation` | isolation | 5 |
+
+Stacking different components (mnestic + memenc + SCSC) on the same host
+yields a rack-wide Keter-grade baseline without touching each VM
+individually. Crucially, subsequent `provision_vm` calls on that host
+also inherit the upgraded baseline — one investment, ongoing return.
+
 ---
 
 ## 10. Hardware catalog (compute)

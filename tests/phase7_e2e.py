@@ -34,14 +34,24 @@ async def test():
         cases = {
             "generic-1u-server": 4_000,
             "generic-2u-server": 24_000,
-            "container-compute-20ft": 100_000,
+            "container-compute-20ft": 100_000,   # compound: 4 × 25_000
             "invidia-dgz-pod": 100_000,
             "ibex-z-base": 50_000,
         }
         for sku_id, expected in cases.items():
             sku = hw.get(sku_id)
             assert sku is not None, f"missing sku: {sku_id}"
-            actual = int(sku.capabilities.get("storage_gb", 0))
+            # Compute totals from bundle if the SKU is a compound module.
+            bundle = sku.capabilities.get("bundle")
+            if bundle:
+                actual = sum(
+                    int(e.get("specs", {}).get("storage_gb", 0))
+                    * int(e.get("count", 1))
+                    for e in bundle
+                    if e.get("kind") == "host"
+                )
+            else:
+                actual = int(sku.capabilities.get("storage_gb", 0))
             print(f"  {sku_id:25s} storage_gb={actual}")
             assert actual == expected
 
