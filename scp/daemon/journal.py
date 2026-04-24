@@ -343,6 +343,11 @@ CREATE INDEX IF NOT EXISTS idx_vessel_orders_state
 CREATE INDEX IF NOT EXISTS idx_vessel_orders_vessel
     ON vessel_orders(vessel_type, vessel_id, state);
 
+CREATE TABLE IF NOT EXISTS settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS site_security_equipment (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     site_id       INTEGER NOT NULL,
@@ -676,6 +681,37 @@ class Journal:
             "UPDATE items SET encrypted_at_rest = ?, updated_at = ? WHERE id = ?",
             (1 if encrypted else 0, iso(now_utc()), item_id),
         )
+
+    # --- settings (key/value) -----------------------------------------
+
+    def get_setting(self, key: str, default: str | None = None) -> str | None:
+        row = self._conn.execute(
+            "SELECT value FROM settings WHERE key = ?", (key,)
+        ).fetchone()
+        return row[0] if row else default
+
+    def set_setting(self, key: str, value: str) -> None:
+        self._conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, str(value)),
+        )
+
+    def get_time_multiplier(self) -> float:
+        """Runtime time-compression factor. 1.0 = real-time; 10.0 = 10×
+        faster than wall clock; 0.0001 = effectively paused. Scheduler
+        divides its sleep by this value."""
+        raw = self.get_setting("time_multiplier", "1.0")
+        try:
+            return float(raw or 1.0)
+        except (TypeError, ValueError):
+            return 1.0
+
+    def set_time_multiplier(self, value: float) -> float:
+        # Clamp to avoid divide-by-zero and absurd values
+        v = max(0.0001, min(10_000.0, float(value)))
+        self.set_setting("time_multiplier", f"{v}")
+        return v
 
     # --- funding ------------------------------------------------------
 

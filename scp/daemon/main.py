@@ -412,6 +412,30 @@ class Daemon:
                 return {"type": "error", "payload": {"error": str(e)}}
             return {"type": "provision_vm", "payload": result}
 
+        if mtype == "time_multiplier":
+            # GET: no payload returns current value
+            # SET: {"value": N} clamps and stores, returns applied value
+            current = self.journal.get_time_multiplier()
+            if payload.get("value") is not None:
+                applied = self.journal.set_time_multiplier(
+                    float(payload["value"])
+                )
+                # Wake the scheduler so the new multiplier takes effect
+                # immediately instead of after its current sleep ends.
+                self.scheduler._wake.set()
+                self.journal.append(
+                    "time_multiplier_changed", "INFO",
+                    {"before": current, "after": applied},
+                )
+                return {
+                    "type": "time_multiplier",
+                    "payload": {"before": current, "multiplier": applied},
+                }
+            return {
+                "type": "time_multiplier",
+                "payload": {"multiplier": current},
+            }
+
         if mtype == "deprovision_vm":
             try:
                 result = gameplay.deprovision_vm(

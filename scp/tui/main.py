@@ -156,6 +156,7 @@ HELP_TOPICS = {
         "title": "Daemon / session",
         "commands": [
             ("sitrep", "Full situation dashboard"),
+            ("speed [preset|N]", "Time compression: realtime | fast | faster | turbo | ludicrous | pause | <number>"),
             ("next", "Imminent pending events with ETAs"),
             ("recent", "Recent journal entries"),
             ("pending", "Scheduled events not yet fired"),
@@ -582,6 +583,71 @@ class ScpTui(App):
 
         if verb == "sitrep":
             await self._show_sitrep()
+            return
+
+        if verb == "speed":
+            # Presets map to a numeric multiplier. 1.0 = real-time. Higher
+            # means the simulation runs faster than wall clock.
+            presets = {
+                "pause":     0.0001,   # effectively frozen
+                "realtime":  1.0,
+                "real":      1.0,
+                "1x":        1.0,
+                "normal":    1.0,
+                "fast":      5.0,
+                "faster":    25.0,
+                "turbo":     100.0,
+                "ludicrous": 1000.0,
+                "plaid":     10_000.0,  # Easter egg / test-only
+            }
+            if len(parts) < 2:
+                reply = await self.client.send({"type": "time_multiplier"})
+                mult = reply.get("payload", {}).get("multiplier", 1.0)
+                self._log(
+                    f"[cyan]current speed:[/] [bold]{mult:g}×[/]  "
+                    f"[dim]({self._speed_label(mult)})[/]\n"
+                    f"[dim]set with:[/] speed <preset | number>\n"
+                    f"[dim]presets: "
+                    + "  ".join(f"{k}({v:g}×)" for k, v in [
+                        ("pause", 0.0001), ("realtime", 1.0),
+                        ("fast", 5.0), ("faster", 25.0),
+                        ("turbo", 100.0), ("ludicrous", 1000.0),
+                    ])
+                    + "[/]"
+                )
+                return
+            arg = parts[1].lower()
+            if arg in presets:
+                value = presets[arg]
+            else:
+                try:
+                    value = float(arg.rstrip("x"))
+                except ValueError:
+                    self._log(
+                        f"[red]unknown speed '{arg}'[/]  "
+                        f"[dim](try one of: "
+                        + ", ".join(presets.keys())
+                        + ", or a number like 12 or 0.5x)[/]"
+                    )
+                    return
+            reply = await self.client.send(
+                {"type": "time_multiplier", "payload": {"value": value}}
+            )
+            payload_ = reply.get("payload", {})
+            applied = payload_.get("multiplier", value)
+            before = payload_.get("before", 1.0)
+            color = (
+                "red" if applied < 0.01 else
+                "yellow" if applied < 1 else
+                "green" if applied <= 1 else
+                "cyan" if applied <= 25 else
+                "magenta"
+            )
+            self._log(
+                f"[green]✓ speed set:[/] [{color}][bold]{applied:g}×[/][/] "
+                f"[dim]({self._speed_label(applied)})[/]  "
+                f"[dim](was {before:g}×)[/]"
+            )
             return
 
         if verb == "scan":
@@ -2850,6 +2916,25 @@ class ScpTui(App):
             self._log(f"  [yellow]• {w}[/]")
 
     @staticmethod
+    @staticmethod
+    def _speed_label(m: float) -> str:
+        if m < 0.01:
+            return "paused"
+        if m < 1:
+            return "slow motion"
+        if m <= 1.0:
+            return "real time"
+        if m <= 5:
+            return "fast"
+        if m <= 25:
+            return "faster"
+        if m <= 100:
+            return "turbo"
+        if m <= 1000:
+            return "ludicrous"
+        return "plaid"
+
+    @staticmethod
     def _fmt_item(it: dict) -> str:
         p = it.get("profile", {})
         color = {
@@ -2958,13 +3043,22 @@ class ScpTui(App):
         player = s.get("player") or {}
         skills = player.get("skills", {})
         sk = " ".join(f"{k}={v}" for k, v in skills.items())
+        mult = float(s.get("time_multiplier", 1.0))
+        speed_color = (
+            "red" if mult < 0.01 else
+            "yellow" if mult < 1 else
+            "green" if mult <= 1 else
+            "cyan" if mult <= 25 else
+            "magenta"
+        )
         self._log(
             f"[bold cyan]== SITREP ==[/]  "
             f"funding=[green]{humanize_money(s.get('funding', 0))}[/]  "
             f"archived={s.get('archived_count', 0)}  "
             f"incidents={s.get('open_incidents', 0)}  "
             f"orders={s.get('pending_purchases', 0)}  "
-            f"contracts={s.get('active_contracts', 0)}"
+            f"contracts={s.get('active_contracts', 0)}  "
+            f"speed=[{speed_color}]{mult:g}×[/]"
         )
         self._log(f"  [bold]you[/] L{player.get('clearance', 0)}  [{sk}]")
 

@@ -113,6 +113,33 @@ Action durations are authored, not tick-abstract. Rough table:
 
 Heuristic: real-world timelines compressed **~10–30×** except interactive actions which stay near-real.
 
+### 4.3.1 Runtime time compression
+
+Two knobs for time scale:
+
+- **`SCP_TIME_SCALE`** env var (daemon-wide, author-level): baked into
+  every duration at import. The canonical design-target compression
+  (~10–30×) can be set here. Shipped default is `1.0` so durations
+  match the §4.3 table verbatim.
+- **Runtime multiplier** (per-save, player-level): stored in the
+  settings table, changeable at any time via the `speed` command.
+  Default `1.0`. Presets: `pause` (0.0001×), `realtime` (1×),
+  `fast` (5×), `faster` (25×), `turbo` (100×), `ludicrous` (1000×),
+  `plaid` (10000×). Any positive number in `[0.0001, 10_000]` is
+  accepted. `speed` with no argument shows the current setting.
+
+The scheduler divides its sleep between events by the multiplier, so
+a nominal 1-hour ETA fires after 36 real-seconds at 100×. Stored ETAs
+remain absolute wall-clock UTCs — the compression is applied at wait
+time, not at schedule time. A speed change mid-sleep takes effect on
+the next re-check (≤60s real, typically instant because the IPC
+handler wakes the scheduler).
+
+The multiplier is shown in `sitrep` and persists across daemon
+restarts. It's designed for players who don't want to wait days of
+wall-clock for a mainframe procurement — set `speed ludicrous` and
+the 14-day install completes in ~20 minutes real time.
+
 ### 4.4 Offline tolerance
 
 When host is powered off, the sim **pauses** (see Open Decisions, §27). On next daemon start, catch-up replay runs the event queue forward to now. Staff on standing orders make decisions via their autonomy rules (see §18). Any event requiring escalation is held in the pager inbox for the player's next check-in.

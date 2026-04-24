@@ -62,15 +62,31 @@ class Scheduler:
                 continue
 
             eta, sid, kind, payload = self._heap[0]
-            delay = (eta - now_utc()).total_seconds()
+            # Time-compression: stored ETAs are absolute wall-clock UTCs,
+            # but we divide the real sleep by the player's chosen
+            # multiplier. 10× → events fire after 1/10th the real sleep.
+            # Downstream handlers still use now_utc() to schedule their
+            # follow-ons, so the compression propagates naturally: each
+            # real second advances N game-seconds of scheduled events.
+            multiplier = self._journal.get_time_multiplier()
+            nominal_delay = (eta - now_utc()).total_seconds()
+            delay = nominal_delay / max(multiplier, 1e-6)
 
             if delay > 0:
+                # Re-check the multiplier periodically so a speed change
+                # takes effect even on long waits. Cap each wait at 60s
+                # real time — next iteration recomputes with any new
+                # multiplier.
+                wait_for = min(delay, 60.0)
                 try:
-                    await asyncio.wait_for(self._wake.wait(), timeout=delay)
+                    await asyncio.wait_for(self._wake.wait(), timeout=wait_for)
                     self._wake.clear()
                     continue
                 except asyncio.TimeoutError:
-                    pass
+                    # Timer elapsed. If we capped at 60s but more delay
+                    # remains (under the current multiplier), loop.
+                    if wait_for < delay:
+                        continue
 
             heapq.heappop(self._heap)
             self._journal.mark_fired(sid)

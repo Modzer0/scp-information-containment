@@ -1129,4 +1129,5 @@ def sitrep(journal: Journal) -> dict:
         "open_incidents": len(journal.list_incidents(200)),
         "pending_purchases": len(journal.list_purchases("ordered")),
         "active_contracts": len(journal.list_contracts(status="active")),
+        "time_multiplier": journal.get_time_multiplier(),
     }
