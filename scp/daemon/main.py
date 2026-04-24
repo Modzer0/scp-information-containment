@@ -5,7 +5,7 @@ import random
 from pathlib import Path
 
 from . import (
-    agents, contracts, gameplay, network, outages, payroll, playbooks,
+    agents, contracts, gameplay, intel, network, outages, payroll, playbooks,
     procurement, recruitment, security, sites, training, transport,
     vessel_ops,
 )
@@ -235,6 +235,24 @@ class Daemon:
                     )
                 else:
                     message = f"contract skipped ({status})"
+
+            elif kind == "intel_mission_complete":
+                result = intel.on_mission_complete(
+                    self.journal,
+                    mission_id=int(payload["mission_id"]),
+                    rng=self.rng,
+                )
+                upgrades = result.get("upgrades") or []
+                if upgrades:
+                    severity = "NOTICE"
+                    lines = ", ".join(
+                        f"{u['rival_name']}: {u['before']}→{u['after']}"
+                        for u in upgrades[:3]
+                    )
+                    extra = f" (+{len(upgrades) - 3} more)" if len(upgrades) > 3 else ""
+                    message = f"intel mission: {lines}{extra}"
+                else:
+                    message = f"intel mission {result.get('mission_id')} — no new contacts"
 
             elif kind == "security_roll":
                 result = security.on_roll(
@@ -715,6 +733,73 @@ class Daemon:
                     "guard_contracts": guards,
                 },
             }
+
+        if mtype == "intel_rivals":
+            return {
+                "type": "intel_rivals",
+                "payload": {
+                    "gois": [g.to_dict() for g in intel.list_gois()],
+                    "regions": list(intel.REGIONS),
+                },
+            }
+
+        if mtype == "intel_contacts":
+            contacts = self.journal.list_intel_contacts()
+            return {
+                "type": "intel_contacts",
+                "payload": {
+                    "contacts": contacts,
+                    "total_rivals": self.journal.count_rival_sites(),
+                    "known": len(contacts),
+                },
+            }
+
+        if mtype == "intel_missions":
+            state_filter = payload.get("state")
+            rows = self.journal.list_intel_missions(state=state_filter)
+            return {
+                "type": "intel_missions",
+                "payload": {"missions": rows},
+            }
+
+        if mtype == "dispatch_intel_mission":
+            try:
+                asset_id = payload.get("asset_id")
+                home_site_id = payload.get("home_site_id")
+                result = intel.dispatch_mission(
+                    self.journal, self.scheduler.add,
+                    kind=str(payload["kind"]),
+                    region=str(payload["region"]),
+                    asset_type=payload.get("asset_type"),
+                    asset_id=int(asset_id) if asset_id is not None else None,
+                    home_site_id=(
+                        int(home_site_id) if home_site_id is not None else None
+                    ),
+                )
+            except ValueError as e:
+                return {"type": "error", "payload": {"error": str(e)}}
+            return {"type": "dispatch_intel_mission", "payload": result}
+
+        if mtype == "estimate_intel_power":
+            # Cheap pre-dispatch preview so the TUI can show expected power
+            # before committing an asset.
+            try:
+                result = intel.estimate_power(
+                    self.journal,
+                    kind=str(payload["kind"]),
+                    asset_type=payload.get("asset_type"),
+                    asset_id=(
+                        int(payload["asset_id"])
+                        if payload.get("asset_id") is not None else None
+                    ),
+                    home_site_id=(
+                        int(payload["home_site_id"])
+                        if payload.get("home_site_id") is not None else None
+                    ),
+                )
+            except ValueError as e:
+                return {"type": "error", "payload": {"error": str(e)}}
+            return {"type": "estimate_intel_power", "payload": result}
 
         if mtype == "security_ratings":
             # Sweep of all sites for a top-level overview.
@@ -1266,6 +1351,9 @@ class Daemon:
             agents.schedule_next_tick(self.scheduler.add)
         if "security_roll" not in pending_kinds:
             security.schedule_next_roll(self.scheduler.add)
+        # Seed the rival-GOI catalog on first boot so intel verbs have
+        # something to act against.
+        intel.seed_rivals_if_empty(self.journal)
         print(
             f"SCP daemon listening on {self.ipc.host}:{self.ipc.port}, "
             f"db {self.journal.db_path}"

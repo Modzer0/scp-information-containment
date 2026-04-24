@@ -356,6 +356,47 @@ CREATE TABLE IF NOT EXISTS site_security_equipment (
 );
 CREATE INDEX IF NOT EXISTS idx_site_security_site
     ON site_security_equipment(site_id);
+
+-- Rival GOI sites (seeded on first boot from intel.SITE_TEMPLATES).
+CREATE TABLE IF NOT EXISTS rival_sites (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id        TEXT UNIQUE NOT NULL,
+    goi_id             TEXT NOT NULL,
+    name               TEXT NOT NULL,
+    site_type          TEXT NOT NULL,
+    region             TEXT NOT NULL,
+    stealth            INTEGER NOT NULL,
+    capability_summary TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_rival_sites_region ON rival_sites(region);
+CREATE INDEX IF NOT EXISTS idx_rival_sites_goi ON rival_sites(goi_id);
+
+-- What the player knows about each rival site. Absence of a row = unknown.
+CREATE TABLE IF NOT EXISTS intel_contacts (
+    rival_site_id  INTEGER PRIMARY KEY,
+    state          TEXT NOT NULL,    -- rumored | located | cataloged
+    first_seen     TEXT NOT NULL,
+    last_updated   TEXT NOT NULL,
+    details_json   TEXT
+);
+
+-- Intel collection missions (dispatched by the player).
+CREATE TABLE IF NOT EXISTS intel_missions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind          TEXT NOT NULL,     -- sigint | elint | imint | humint
+    region        TEXT NOT NULL,
+    asset_type    TEXT NOT NULL,     -- '' | aircraft | ship | submarine | satellite | staff
+    asset_id      INTEGER,
+    home_site_id  INTEGER,
+    power         INTEGER NOT NULL,
+    state         TEXT NOT NULL,     -- active | complete | cancelled
+    started_at    TEXT NOT NULL,
+    eta_utc       TEXT NOT NULL,
+    scheduled_id  INTEGER,
+    result_json   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_intel_missions_state
+    ON intel_missions(state);
 """
 
 
@@ -1599,6 +1640,209 @@ class Journal:
             "DELETE FROM site_security_equipment WHERE id = ?",
             (int(equipment_id),),
         )
+
+    # --- rival GOI sites + intel contacts ----------------------------
+
+    def create_rival_site(
+        self,
+        template_id: str,
+        goi_id: str,
+        name: str,
+        site_type: str,
+        region: str,
+        stealth: int,
+        capability_summary: str = "",
+    ) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO rival_sites (template_id, goi_id, name, "
+            "site_type, region, stealth, capability_summary) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (template_id, goi_id, name, site_type, region,
+             int(stealth), capability_summary),
+        )
+        return cur.lastrowid or 0
+
+    def count_rival_sites(self) -> int:
+        row = self._conn.execute(
+            "SELECT COUNT(*) FROM rival_sites"
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def list_rival_sites(
+        self, region: str | None = None, goi_id: str | None = None
+    ) -> list[dict]:
+        clauses, binds = [], []
+        if region is not None:
+            clauses.append("region = ?")
+            binds.append(region)
+        if goi_id is not None:
+            clauses.append("goi_id = ?")
+            binds.append(goi_id)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        rows = self._conn.execute(
+            f"SELECT id, template_id, goi_id, name, site_type, region, "
+            f"stealth, capability_summary FROM rival_sites{where} "
+            f"ORDER BY goi_id, id",
+            tuple(binds),
+        ).fetchall()
+        return [
+            {
+                "id": r[0], "template_id": r[1], "goi_id": r[2],
+                "name": r[3], "site_type": r[4], "region": r[5],
+                "stealth": r[6], "capability_summary": r[7],
+            }
+            for r in rows
+        ]
+
+    def get_rival_site(self, rival_site_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT id, template_id, goi_id, name, site_type, region, "
+            "stealth, capability_summary FROM rival_sites WHERE id = ?",
+            (int(rival_site_id),),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0], "template_id": row[1], "goi_id": row[2],
+            "name": row[3], "site_type": row[4], "region": row[5],
+            "stealth": row[6], "capability_summary": row[7],
+        }
+
+    def get_intel_contact_state(self, rival_site_id: int) -> str | None:
+        row = self._conn.execute(
+            "SELECT state FROM intel_contacts WHERE rival_site_id = ?",
+            (int(rival_site_id),),
+        ).fetchone()
+        return row[0] if row else None
+
+    def upsert_intel_contact(
+        self, rival_site_id: int, state: str, details_json: str | None = None
+    ) -> None:
+        ts = iso(now_utc())
+        existing = self._conn.execute(
+            "SELECT first_seen FROM intel_contacts WHERE rival_site_id = ?",
+            (int(rival_site_id),),
+        ).fetchone()
+        if existing:
+            self._conn.execute(
+                "UPDATE intel_contacts SET state = ?, last_updated = ?, "
+                "details_json = ? WHERE rival_site_id = ?",
+                (state, ts, details_json, int(rival_site_id)),
+            )
+        else:
+            self._conn.execute(
+                "INSERT INTO intel_contacts (rival_site_id, state, "
+                "first_seen, last_updated, details_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (int(rival_site_id), state, ts, ts, details_json),
+            )
+
+    def list_intel_contacts(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT c.rival_site_id, c.state, c.first_seen, c.last_updated, "
+            "c.details_json, r.goi_id, r.name, r.site_type, r.region, "
+            "r.stealth, r.capability_summary "
+            "FROM intel_contacts c JOIN rival_sites r "
+            "ON c.rival_site_id = r.id ORDER BY r.goi_id, r.id"
+        ).fetchall()
+        return [
+            {
+                "rival_site_id": r[0], "state": r[1],
+                "first_seen": r[2], "last_updated": r[3],
+                "details_json": r[4], "goi_id": r[5],
+                "name": r[6], "site_type": r[7], "region": r[8],
+                "stealth": r[9], "capability_summary": r[10],
+            }
+            for r in rows
+        ]
+
+    # --- intel missions ----------------------------------------------
+
+    def create_intel_mission(
+        self,
+        kind: str,
+        region: str,
+        asset_type: str,
+        asset_id: int | None,
+        home_site_id: int | None,
+        eta_iso: str,
+        power: int,
+    ) -> int:
+        cur = self._conn.execute(
+            "INSERT INTO intel_missions (kind, region, asset_type, "
+            "asset_id, home_site_id, power, state, started_at, eta_utc) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)",
+            (kind, region, asset_type,
+             int(asset_id) if asset_id is not None else None,
+             int(home_site_id) if home_site_id is not None else None,
+             int(power), iso(now_utc()), eta_iso),
+        )
+        return cur.lastrowid or 0
+
+    def set_intel_mission_scheduled_id(self, mission_id: int, sid: int) -> None:
+        self._conn.execute(
+            "UPDATE intel_missions SET scheduled_id = ? WHERE id = ?",
+            (int(sid), int(mission_id)),
+        )
+
+    def set_intel_mission_state(
+        self, mission_id: int, state: str, result_json: str | None = None
+    ) -> None:
+        if result_json is None:
+            self._conn.execute(
+                "UPDATE intel_missions SET state = ? WHERE id = ?",
+                (state, int(mission_id)),
+            )
+        else:
+            self._conn.execute(
+                "UPDATE intel_missions SET state = ?, result_json = ? "
+                "WHERE id = ?",
+                (state, result_json, int(mission_id)),
+            )
+
+    def get_intel_mission(self, mission_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT id, kind, region, asset_type, asset_id, home_site_id, "
+            "power, state, started_at, eta_utc, scheduled_id, result_json "
+            "FROM intel_missions WHERE id = ?",
+            (int(mission_id),),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "id": row[0], "kind": row[1], "region": row[2],
+            "asset_type": row[3], "asset_id": row[4],
+            "home_site_id": row[5], "power": row[6],
+            "state": row[7], "started_at": row[8], "eta_utc": row[9],
+            "scheduled_id": row[10], "result_json": row[11],
+        }
+
+    def list_intel_missions(
+        self, state: str | None = None
+    ) -> list[dict]:
+        if state is None:
+            rows = self._conn.execute(
+                "SELECT id, kind, region, asset_type, asset_id, home_site_id, "
+                "power, state, started_at, eta_utc, scheduled_id, result_json "
+                "FROM intel_missions ORDER BY id DESC"
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT id, kind, region, asset_type, asset_id, home_site_id, "
+                "power, state, started_at, eta_utc, scheduled_id, result_json "
+                "FROM intel_missions WHERE state = ? ORDER BY id DESC",
+                (state,),
+            ).fetchall()
+        return [
+            {
+                "id": r[0], "kind": r[1], "region": r[2],
+                "asset_type": r[3], "asset_id": r[4],
+                "home_site_id": r[5], "power": r[6],
+                "state": r[7], "started_at": r[8], "eta_utc": r[9],
+                "scheduled_id": r[10], "result_json": r[11],
+            }
+            for r in rows
+        ]
 
     # --- vessel orders ------------------------------------------------
 

@@ -1690,7 +1690,41 @@ sites from the map and transfer their archive to you.
 None of the above is implemented yet — this section captures design intent so
 future phases (12+) can land against a clear vision.
 
-### 24.6 Rival-GOI detection + raids (deferred — extends §13.4 + §14.0)
+### 24.6 Rival-GOI detection + raids (partial — groundwork landed)
+
+**Groundwork** (implemented):
+
+- Rival GOI catalog: Chaos Insurgency, Marshall Carter & Dark, GOC,
+  Prometheus Labs, Church of the Broken God. 13 rival sites seeded on
+  first boot across 9 regions.
+- Each rival site has a numeric stealth rating (40–80) and a capability
+  summary. Sites are unknown to the player by default.
+- Intel contact state machine per rival site, per save:
+  `unknown` → `rumored` → `located` → `cataloged` (progressive reveal).
+- Mission kinds: `sigint`, `elint`, `imint`, `humint`. Base powers 45 /
+  50 / 55 / 60; bonuses from:
+  - Aircraft `isr_type` matching the mission kind (+20 on match)
+  - Vessel equipment (sensor ratings + ELINT suite bonus)
+  - Satellites (sigint/imint payloads match)
+  - Staff `infosec` skill for HUMINT (scales ≥ 30)
+  - Home-site signals gear (`imint-dome`, `comint-mast`, `elint-array`)
+- Dispatch semantics: `intel_mission <kind> <region> [asset:id]
+  [home:site]`. Scheduler fires `intel_mission_complete` after a
+  kind-specific game-time delay; detection roll is
+  `1d100 <= clamp(5, 95, power - stealth + 50)` per rival site in
+  the region, advancing contact state one step per hit.
+
+**Deferred** (next phase):
+
+- Rival GOIs detecting the player back (symmetric fog-of-war).
+- Rival GOI dynamic behavior — they currently sit as static targets.
+- Raid pipeline (plan → breach → exfil → destroy) — requires the
+  §24.5 combat layer first.
+- HUMINT operative pipeline: dedicated staff role, insertion risk,
+  burn/extraction mechanics.
+- Intel half-life: today contacts never decay. Real intel goes stale.
+
+**Design anchors preserved from the original §24.5/§24.6 sketch:**
 
 Today the IMINT dome, COMINT mast, ELINT array (§13.4) and vessel
 sensor gear (§14.0) only raise your own site-security rating — the

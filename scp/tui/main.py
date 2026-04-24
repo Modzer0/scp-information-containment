@@ -19,6 +19,17 @@ HINT = (
 
 
 HELP_TOPICS = {
+    "intel": {
+        "title": "Intel — rival GOI detection (groundwork)",
+        "commands": [
+            ("intel", "Overview: contacts + active missions"),
+            ("intel_rivals", "Catalog of rival GOIs and regions"),
+            ("intel_contacts", "Sites we've detected so far (by state)"),
+            ("intel_missions [state]", "List intel missions (optional state filter)"),
+            ("intel_mission <kind> <region> [asset_type:id] [home_site:id]",
+             "Dispatch sigint/elint/imint/humint mission. asset is aircraft:N / ship:N / sub:N / satellite:N / staff:N"),
+        ],
+    },
     "ops": {
         "title": "Operations",
         "commands": [
@@ -1663,6 +1674,199 @@ class ScpTui(App):
             )
             for sid, err in failed:
                 self._log(f"  [red]✗ staff {sid}:[/] {err}")
+            return
+
+        if verb == "intel":
+            # Compact overview: how many contacts per state, active missions
+            r1 = await self.client.send({"type": "intel_contacts"})
+            r2 = await self.client.send(
+                {"type": "intel_missions", "payload": {"state": "active"}}
+            )
+            contacts = r1.get("payload", {}).get("contacts", [])
+            total = r1.get("payload", {}).get("total_rivals", 0)
+            known = len(contacts)
+            missions = r2.get("payload", {}).get("missions", [])
+            by_state = {"rumored": 0, "located": 0, "cataloged": 0}
+            for c in contacts:
+                by_state[c["state"]] = by_state.get(c["state"], 0) + 1
+            self._log(
+                f"[bold cyan]== INTEL OVERVIEW ==[/]  "
+                f"rival sites known: [bold]{known}/{total}[/]  "
+                f"([yellow]rumored={by_state['rumored']}[/] "
+                f"[cyan]located={by_state['located']}[/] "
+                f"[green]cataloged={by_state['cataloged']}[/])"
+            )
+            if missions:
+                self._log(f"[bold]-- active missions ({len(missions)}) --[/]")
+                for m in missions[:10]:
+                    tag = (
+                        f"{m['asset_type']}:{m['asset_id']}"
+                        if m['asset_type'] else "no-asset"
+                    )
+                    self._log(
+                        f"  #{m['id']:>3}  {m['kind']:6s}  region={m['region']:<14s}  "
+                        f"power={m['power']:>3}  asset={tag}  "
+                        f"ETA {m['eta_utc'][:16]}"
+                    )
+            else:
+                self._log("[dim]  no active missions[/]")
+            if contacts:
+                self._log(f"[bold]-- known contacts --[/]")
+                color_by_state = {
+                    "rumored": "yellow", "located": "cyan", "cataloged": "green"
+                }
+                for c in contacts[:20]:
+                    col = color_by_state.get(c["state"], "white")
+                    self._log(
+                        f"  [{col}]{c['state']:10s}[/] "
+                        f"[bold]{c['name']:30s}[/] "
+                        f"[dim]{c['goi_id']}  {c['region']}  "
+                        f"stealth={c['stealth']}[/]"
+                    )
+                if len(contacts) > 20:
+                    self._log(f"  [dim]... +{len(contacts) - 20} more[/]")
+            else:
+                self._log("[dim]  no contacts yet — dispatch intel missions[/]")
+            return
+
+        if verb == "intel_rivals":
+            reply = await self.client.send({"type": "intel_rivals"})
+            p = reply.get("payload", {})
+            gois = p.get("gois", [])
+            regions = p.get("regions", [])
+            self._log(f"[bold]-- Rival GOIs ({len(gois)}) --[/]")
+            for g in gois:
+                color = {
+                    "hostile": "red", "competitor": "yellow",
+                    "state": "cyan", "criminal": "magenta",
+                }.get(g["disposition"], "white")
+                self._log(
+                    f"  [cyan]{g['goi_id']:22s}[/] [{color}]{g['disposition']:<10s}[/] "
+                    f"[bold]{g['name']}[/]"
+                )
+                self._log(f"    [dim]{g['description']}[/]")
+            self._log(f"[bold]-- Regions ({len(regions)}) --[/]")
+            self._log("  " + "  ".join(regions))
+            return
+
+        if verb == "intel_contacts":
+            reply = await self.client.send({"type": "intel_contacts"})
+            p = reply.get("payload", {})
+            contacts = p.get("contacts", [])
+            if not contacts:
+                self._log(
+                    f"[dim]no contacts yet — {p.get('total_rivals', 0)} rival "
+                    f"sites exist; dispatch intel missions to detect them[/]"
+                )
+                return
+            color_by_state = {
+                "rumored": "yellow", "located": "cyan", "cataloged": "green"
+            }
+            self._log(
+                f"[bold]== Intel contacts "
+                f"({len(contacts)}/{p.get('total_rivals', 0)}) ==[/]"
+            )
+            for c in contacts:
+                col = color_by_state.get(c["state"], "white")
+                self._log(
+                    f"  [{col}]{c['state']:10s}[/] "
+                    f"[bold]{c['name']:32s}[/] "
+                    f"{c['site_type']:14s} @ {c['region']:<14s} "
+                    f"[dim]goi={c['goi_id']} stealth={c['stealth']}[/]"
+                )
+                if c["state"] == "cataloged":
+                    self._log(f"    [dim]{c['capability_summary']}[/]")
+            return
+
+        if verb == "intel_missions":
+            state = parts[1] if len(parts) > 1 else None
+            payload_ = {"state": state} if state else {}
+            reply = await self.client.send(
+                {"type": "intel_missions", "payload": payload_}
+            )
+            missions = reply.get("payload", {}).get("missions", [])
+            if not missions:
+                self._log("[dim]no intel missions on record[/]")
+                return
+            for m in missions[:30]:
+                color = {
+                    "active": "cyan", "complete": "green", "cancelled": "yellow"
+                }.get(m["state"], "white")
+                tag = (
+                    f"{m['asset_type']}:{m['asset_id']}"
+                    if m['asset_type'] else "no-asset"
+                )
+                self._log(
+                    f"  [{color}]#{m['id']:>3}[/] {m['kind']:6s} "
+                    f"region={m['region']:<14s} power={m['power']:>3} "
+                    f"[{m['state']:9s}] asset={tag} ETA {m['eta_utc'][:16]}"
+                )
+            return
+
+        if verb == "intel_mission":
+            # intel_mission <kind> <region> [asset_type:id] [home:site_id]
+            if len(parts) < 3:
+                self._log(
+                    "[yellow]usage: intel_mission <sigint|elint|imint|humint> "
+                    "<region> [asset_type:id] [home:site_id][/]\n"
+                    "[dim]  asset_type ∈ aircraft, ship, sub, submarine, satellite, staff[/]\n"
+                    "[dim]  humint requires staff:<id>; others are asset-optional[/]"
+                )
+                return
+            kind = parts[1].lower()
+            region = parts[2].lower()
+            asset_type = None
+            asset_id = None
+            home_site_id = None
+            for tok in parts[3:]:
+                if ":" not in tok:
+                    continue
+                head, val = tok.split(":", 1)
+                head = head.lower()
+                if head == "home":
+                    try:
+                        home_site_id = int(val)
+                    except ValueError:
+                        self._log("[red]home:<id> must be integer[/]")
+                        return
+                else:
+                    at = {"sub": "submarine"}.get(head, head)
+                    if at not in (
+                        "aircraft", "ship", "submarine", "satellite", "staff"
+                    ):
+                        self._log(f"[red]unknown asset type '{head}'[/]")
+                        return
+                    try:
+                        asset_id = int(val)
+                    except ValueError:
+                        self._log(f"[red]{head}:<id> must be integer[/]")
+                        return
+                    asset_type = at
+            reply = await self.client.send({
+                "type": "dispatch_intel_mission",
+                "payload": {
+                    "kind": kind, "region": region,
+                    "asset_type": asset_type, "asset_id": asset_id,
+                    "home_site_id": home_site_id,
+                },
+            })
+            if reply.get("type") == "error":
+                self._log(f"[red]{reply['payload'].get('error')}[/]")
+                return
+            r = reply.get("payload", {})
+            p = r.get("power", {})
+            atag = (
+                f"{r.get('asset_type')}:{r.get('asset_id')}"
+                if r.get("asset_type") else "no-asset"
+            )
+            self._log(
+                f"[green]✓ intel mission #{r.get('mission_id')}[/] "
+                f"{kind} / {region}  asset={atag}  "
+                f"power=[bold]{p.get('total', 0)}[/] "
+                f"(base {p.get('base', 0)} + asset {p.get('asset_bonus', 0)} "
+                f"+ site {p.get('site_bonus', 0)})  "
+                f"ETA {r.get('eta', '?')[:16]}"
+            )
             return
 
         if verb == "security":
